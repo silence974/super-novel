@@ -14,7 +14,7 @@
 
 ## TD-001 桌面技术栈
 
-状态：`spiking`（最小 Tauri/Rust/SQLite/exe 链路已验证；installer bundling 仍未解决，暂不 accepted）
+状态：`spiking`（最小 Tauri/Rust/SQLite/exe 链路已验证，正在继续验证分发与多数据层边界；installer bundling 仍未解决，暂不 accepted）
 
 首选：`Tauri v2 + Rust backend + WebView2`
 
@@ -56,13 +56,14 @@
 - 2026-05-09：新增 `run_snapshot_restore_spike`，验证 SQLite 项目数据库文件快照和恢复。
 - 2026-05-09：快照恢复测试通过，验证章节标题和冲突数量可恢复到快照状态。
 - 2026-05-09：接入快照恢复命令后 release exe 约 10.07 MB。
-- 2026-05-09：Rust 工具链安装在 `%USERPROFILE%\.cargo\bin`；当前 shell 的 `PATH` 不一定包含 `cargo`，验证命令优先使用完整路径。
-- 2026-05-09：使用 `%USERPROFILE%\.cargo\bin\cargo.exe test` 通过，4 个测试全过。
-- 2026-05-09：使用 `%USERPROFILE%\.cargo\bin\cargo.exe fmt --check` 通过。
-- 2026-05-09：`npm run tauri build -- --no-bundle` 需要当前 shell 的 `PATH` 包含 `%USERPROFILE%\.cargo\bin`，否则 Tauri CLI 内部 `cargo metadata` 会失败。
+- 2026-05-10：使用 rustup 管理的 stable MSVC 工具链复跑验证，`rustc 1.95.0`、`cargo 1.95.0` 可用。
+- 2026-05-10：`cargo test` 通过，4 个测试全过。
+- 2026-05-10：`cargo fmt --check` 通过。
+- 2026-05-10：确保 `cargo` 在 `PATH` 后，`npm run tauri build -- --no-bundle` 通过，release exe 约 10.32 MiB。
 
 当前结论：
 
+- TD-001 已不再是纯 `proposed`：当前已有可复跑的 Tauri/Rust/SQLite/exe spike 结果支撑继续推进。
 - Tauri v2 作为 Windows 桌面端基础可继续推进。
 - Rust 后端可以承载本地 SQLite 状态图谱服务。
 - `rusqlite bundled` 对最小 exe 体积增加约 1.4 MB，当前可接受。
@@ -71,6 +72,7 @@
 - 单 SQLite 数据库文件可以用文件复制实现最低成本快照；多数据库组合时必须重新验证一致性。
 - 当前阻塞不是 Rust/Tauri 编译链，而是安装包 bundler 外部二进制下载。
 - 首期开发阶段可在注入 Rust 工具链路径后使用 `--no-bundle` 验证 exe；正式分发前需要解决 WiX/NSIS 工具链缓存或预安装。
+- Rust 工具链本机路径不是项目事实；复跑验证时只要求 rustup 管理的 stable MSVC 工具链可用，且 `cargo` 能被 Tauri CLI 从 `PATH` 解析到。
 
 ## TD-002 数据层组合
 
@@ -90,9 +92,9 @@
 
 本地验证记录：
 
-- 2026-05-08：已新增 `spikes/sqlite-state-graph/`，用 Python 标准库 `sqlite3` 验证 SQLite 原型 schema。
+- 2026-05-08：已新增 `spikes/sqlite-state-graph/`，用 uv 管理的 Python 环境和标准库 `sqlite3` 验证 SQLite 原型 schema。
 - 验证结果：可创建 Project、Chapter、Event、Entity、Fact、Graph Edge、Check Result、Snapshot、Vector Entry 的最小结构。
-- 验证结果：本机 Python SQLite 支持 FTS5。
+- 验证结果：uv 管理的 Python 环境中，标准库 `sqlite3` 支持 FTS5。
 - 2026-05-09：Tauri Rust 后端已用 `rusqlite bundled` 复现内存 SQLite 状态图谱验证。
 - 2026-05-09：Tauri 前端已可通过 `invoke("run_state_graph_spike")` 获取状态图谱报告。
 - 2026-05-09：Tauri 前端已可通过 `invoke("run_project_database_spike")` 创建或打开本地项目数据库。
@@ -124,6 +126,7 @@
 - 已验证检查：同一角色重叠地点冲突、同一道具重叠持有者冲突。
 - 已验证隔离：`candidate` fact 不进入 confirmed 检查链。
 - 已验证流程：最小增量影响范围流程已在 `spikes/tauri-minimal` 中通过“变更事实 -> 影响范围 -> 规则子集 -> 预览补丁 -> 回滚”验证。
+- 该验证只覆盖最小影响范围闭环，不代表复杂关系路径查询或通用变更模型已经完成。
 - 尚未验证：复杂关系路径查询、通用变更模型、专用嵌入式图数据库打包。
 
 ## TD-004 向量检索

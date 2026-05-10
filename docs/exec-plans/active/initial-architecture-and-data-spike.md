@@ -53,12 +53,11 @@ active
 
 - Node 可用。
 - npm 可用。
-- Python 3.12 可用。
+- Python 环境通过 `uv` 管理，使用 Python 3.12 或兼容版本运行 SQLite Python spike。
 - 已通过 rustup 安装 Rust stable MSVC 工具链。
 - `rustc 1.95.0` 可用。
-- `cargo 1.95.0` 已通过完整路径验证；当前 shell 的 `PATH` 不一定包含 `cargo`。
-- Rust 工具链路径：`%USERPROFILE%\.cargo\bin`。
-- sqlite3 CLI 不可用，但 Python 标准库 `sqlite3` 可用。
+- `cargo 1.95.0` 可用；复跑 Tauri 命令时需确保 `cargo` 在 `PATH` 中。
+- sqlite3 CLI 不可用，但 uv 管理的 Python 环境中标准库 `sqlite3` 可用。
 
 ### 2026-05-08 Tauri 最小桌面原型
 
@@ -208,6 +207,23 @@ active
 - 恢复前必须关闭或释放数据库连接，并确保写入落盘。
 - 正式产品如果采用多数据库组合，必须设计跨数据库一致性快照。
 
+### 2026-05-10 项目进度文档校准
+
+已确认事实：
+
+- `spikes/sqlite-state-graph/prototype.py` 已验证可运行，覆盖 SQLite/FTS5、位置链、道具持有链、倒叙、candidate fact 隔离和 2 个 `error` 冲突。
+- `spikes/tauri-minimal` 中 `npm run build` 通过。
+- 使用 rustup 管理的 stable MSVC 工具链复跑验证，`rustc 1.95.0`、`cargo 1.95.0` 可用。
+- `cargo test` 通过，4 个测试全过。
+- `cargo fmt --check` 通过。
+- 确保 `cargo` 在 `PATH` 后，`npm run tauri build -- --no-bundle` 通过，可生成 exe，大小约 10.32 MiB。
+
+仍未完成：
+
+- 向量检索和 OpenAI Provider Adapter 仍未实现。
+- 复杂关系路径查询、专用图数据库打包、多数据库快照一致性仍未验证。
+- 当前仅验证单 SQLite 文件快照恢复；正式快照元数据策略仍未确定。
+
 ### 2026-05-08 SQLite 状态图谱原型
 
 新增原型：
@@ -235,20 +251,31 @@ active
 
 ## 当前可复跑验证命令
 
+前置条件：
+
+- Node/npm 可用。
+- Rust stable MSVC 工具链由 rustup 管理，且 `cargo` 在 `PATH` 中。
+- Python 环境由 `uv` 管理，使用 Python 3.12 或兼容版本运行 SQLite Python spike。
+
+在 `spikes/sqlite-state-graph` 下：
+
+- `uv run --python 3.12 python .\prototype.py`
+
 在 `spikes/tauri-minimal` 下：
 
-- `npm run build`
-- `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"; npm run tauri build -- --no-bundle`
+- `npm.cmd run build`
+- `npm.cmd run tauri build -- --no-bundle`
 
 在 `spikes/tauri-minimal/src-tauri` 下：
 
-- `& "$env:USERPROFILE\.cargo\bin\cargo.exe" test`
-- `& "$env:USERPROFILE\.cargo\bin\cargo.exe" fmt --check`
+- `cargo test`
+- `cargo fmt --check`
 
 备注：
 
-- 使用完整 `cargo.exe` 路径是为了规避当前 shell 的 `PATH` 不一定包含 Rust 工具链的问题。
-- Tauri CLI 会通过 `PATH` 调用 `cargo metadata`，因此复跑 `npm run tauri build -- --no-bundle` 前需要先把 `%USERPROFILE%\.cargo\bin` 注入当前 shell 的 `PATH`。
+- PowerShell 下优先使用 `npm.cmd`，避免执行策略拦截 `npm.ps1`。
+- Tauri CLI 会通过 `PATH` 调用 `cargo metadata`，因此复跑 `npm.cmd run tauri build -- --no-bundle` 前必须确保 `cargo` 可从 `PATH` 解析。
+- 不在进度文档中记录本机 Rust/Python 安装路径；如果某个环境缺少工具链，应先修复 rustup/uv 等可复刻环境约定，而不是把本机路径写成项目事实。
 - 当前 `--no-bundle` 可生成 exe；正式 installer bundling 仍受 WiX/NSIS 下载或缓存问题影响。
 
 ## 验收标准

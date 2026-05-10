@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Super Novel Tauri Spike</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Windows desktop spike</p>
+        <h1>Super Novel 状态图谱验证台</h1>
+        <p class="summary">
+          Tauri 前端调用 Rust 后端，在内存或本地项目 SQLite 数据库中构建事件、
+          事实、检查结果，验证强约束状态机的最小闭环。
+        </p>
+        <div class="actions">
+          <button id="run-memory-spike" type="button">运行内存验证</button>
+          <button id="run-project-spike" type="button">创建/打开本地项目库</button>
+          <button id="run-incremental-spike" type="button">运行增量检查预览</button>
+          <button id="run-snapshot-spike" type="button">运行快照恢复验证</button>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <span class="label">SQLite</span>
+          <strong id="sqlite-version">未运行</strong>
+          <small id="fts-status">FTS5 状态待检测</small>
+        </article>
+        <article class="card">
+          <span class="label">冲突</span>
+          <strong id="conflict-count">0</strong>
+          <small>error / warning / notice 的前置验证</small>
+        </article>
+        <article class="card">
+          <span class="label">候选事实</span>
+          <strong id="candidate-count">0</strong>
+          <small>候选数据不会进入 confirmed 检查链</small>
+        </article>
+        <article class="card">
+          <span class="label">项目库</span>
+          <strong id="db-mode">未运行</strong>
+          <small id="seed-status">尚未创建或打开项目数据库</small>
+        </article>
+        <article class="card">
+          <span class="label">增量检查</span>
+          <strong id="resolved-count">0</strong>
+          <small id="impact-summary">尚未运行影响范围计算</small>
+        </article>
+        <article class="card">
+          <span class="label">快照恢复</span>
+          <strong id="restore-status">未运行</strong>
+          <small id="snapshot-size">尚未创建快照</small>
+        </article>
+      </section>
+
+      <section class="database-card">
+        <span class="label">Database Path</span>
+        <code id="database-path">未运行</code>
+      </section>
+
+      <section class="incremental-card">
+        <div class="section-header">
+          <div>
+            <span class="label">Incremental Check Preview</span>
+            <h2>受影响范围与补丁预览</h2>
+          </div>
+          <code id="changed-fact">未运行</code>
+        </div>
+        <p id="patch-description">尚未生成增量检查预览。</p>
+        <div class="scope-grid">
+          <div>
+            <span>实体</span>
+            <code id="affected-entities">无</code>
+          </div>
+          <div>
+            <span>事件</span>
+            <code id="affected-events">无</code>
+          </div>
+          <div>
+            <span>章节</span>
+            <code id="affected-chapters">无</code>
+          </div>
+          <div>
+            <span>事实</span>
+            <code id="affected-facts">无</code>
+          </div>
+          <div>
+            <span>规则</span>
+            <code id="affected-rules">无</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="snapshot-card">
+        <div class="section-header">
+          <div>
+            <span class="label">Snapshot Restore</span>
+            <h2>项目快照与回滚验证</h2>
+          </div>
+          <code id="snapshot-path">未运行</code>
+        </div>
+        <div class="scope-grid">
+          <div>
+            <span>破坏前章节</span>
+            <code id="chapter-before-damage">无</code>
+          </div>
+          <div>
+            <span>破坏后章节</span>
+            <code id="chapter-after-damage">无</code>
+          </div>
+          <div>
+            <span>恢复后章节</span>
+            <code id="chapter-after-restore">无</code>
+          </div>
+          <div>
+            <span>冲突数变化</span>
+            <code id="snapshot-conflicts">无</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="panels">
+        <article>
+          <h2>位置链</h2>
+          <ul id="location-chain"></ul>
+        </article>
+        <article>
+          <h2>道具持有链</h2>
+          <ul id="item-chain"></ul>
+        </article>
+        <article>
+          <h2>叙事顺序</h2>
+          <ul id="narrative-order"></ul>
+        </article>
+        <article class="conflicts">
+          <h2>冲突结果</h2>
+          <ul id="conflicts"></ul>
+        </article>
+        <article>
+          <h2>增量修复前</h2>
+          <ul id="before-scope-conflicts"></ul>
+        </article>
+        <article>
+          <h2>增量修复后</h2>
+          <ul id="after-scope-conflicts"></ul>
+        </article>
+        <article>
+          <h2>剩余全局冲突</h2>
+          <ul id="remaining-global-conflicts"></ul>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

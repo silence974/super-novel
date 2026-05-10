@@ -1,0 +1,23 @@
+﻿# Windows Desktop Stack Reference Summary For LLMs And Engineers
+
+Purpose: 给 AI 和工程人员消费的 Windows 桌面技术栈摘要，不是官方文档原文复制。
+
+Sources:
+- https://v2.tauri.app/
+- https://v2.tauri.app/reference/webview-versions/
+- https://learn.microsoft.com/windows/apps/winui/
+
+Project mapping:
+- 用户明确优先 Windows 原生体验和安装包体积。
+- 首选方向是 Tauri v2 + Rust backend + WebView2。
+- WinUI/.NET 是备选方向。
+- Electron 不作为首选，因为安装体积和资源占用与当前优先级冲突。
+
+Key constraints:
+- 数据库和索引应由应用托管。
+- 用户不应手动安装图数据库或向量库服务。
+- 打包 spike 必须验证 WebView2 依赖策略和 native dependency 体积。
+
+Risks:
+- Tauri 与嵌入式图数据库、向量库的绑定复杂度。
+- Windows 安装包签名和升级流程后续需要设计。

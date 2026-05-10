@@ -1,0 +1,25 @@
+﻿# OpenAI API Reference Summary For LLMs And Engineers
+
+Purpose: 给 AI 和工程人员消费的 OpenAI API 摘要，不是官方文档原文复制。
+
+Sources:
+- https://platform.openai.com/docs
+- https://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety
+
+Project mapping:
+- 首期只实现 OpenAI API Provider。
+- 业务层不得直接依赖具体 SDK 调用，应通过 Provider Adapter。
+- API key 由用户配置并安全存储。
+- 模型响应不能直接写入正式事实库。
+
+Key constraints:
+- 不要在日志中记录 API key。
+- 不要把完整作品默认发送给模型。
+- 每个 AI 请求应有任务类型、上下文范围和输出 schema。
+- 抽取结果应保存为 candidate，再由用户确认。
+
+Risks:
+- 模型可能幻觉设定。
+- 模型可能抽取错误关系。
+- Prompt 上下文过大可能导致成本和隐私风险。
+- 后续 Provider 切换需要统一接口抽象。

@@ -1,0 +1,28 @@
+﻿# Embedded Graph DB Reference Summary For LLMs And Engineers
+
+Purpose: 给 AI 和工程人员消费的嵌入式图数据库摘要，不是官方文档原文复制。
+
+Sources:
+- https://docs.kuzudb.com/
+- https://www.sqlite.org/
+
+Project mapping:
+- 项目需要复杂图查询和状态机一致性。
+- 用户允许多数据库组合，但不希望感知外部服务。
+- 图数据库最终选型必须通过 spike 验证。
+
+Candidate directions:
+- 嵌入式图数据库：更接近原生图查询，但需要验证 Windows 打包和语言绑定。
+- SQLite 节点边表：部署简单，但复杂图查询需要应用层封装。
+- 混合方案：SQLite 做事实源，图索引做派生查询层。
+
+Key queries to validate:
+- 查询角色在某时间点的位置。
+- 查询道具持有链。
+- 查询人物关系变化路径。
+- 查询事件因果链。
+
+Risks:
+- 多数据库快照一致性。
+- 图数据库 schema 与状态机 schema 重复。
+- 查询性能与打包体积之间的取舍。

@@ -26,12 +26,15 @@
 - 当前 Tauri command：`run_incremental_check_spike`。
 - 当前 Tauri command：`run_snapshot_restore_spike`。
 - 当前 Tauri command：`run_vector_search_spike`。
+- 当前 Tauri command：`run_openai_provider_adapter_spike`。
+- 当前 Tauri command：`run_relationship_path_spike`。
 - 当前 demo 本地数据库路径：`%LOCALAPPDATA%\super-novel-tauri-spike\projects\demo-work\project.db`。
 - 当前 demo 快照路径：`%LOCALAPPDATA%\super-novel-tauri-spike\projects\demo-work\snapshots\demo-snapshot.project.db`。
 - 已验证本地 SQLite 文件首次 seed 和二次复用。
 - 已验证 SQLite savepoint 可用于预览式补丁和回滚。
 - 已验证 SQLite 数据库文件复制可用于最低成本快照恢复。
 - 已验证最小向量索引写入、savepoint 内单条 source 更新预览和余弦相似度查询。
+- 已验证 Tauri SQLite schema 中的 `graph_edges` 可支持最小 recursive CTE 多跳关系路径查询。
 
 ## 关系数据库草案
 

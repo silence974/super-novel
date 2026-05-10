@@ -42,7 +42,7 @@ active
 4. `[partial]` 验证角色位置链、道具持有链和关系路径查询。
 5. `[partial]` 验证向量索引写入、更新和语义查询。
 6. `[partial]` 设计并验证时间域和时间流速映射样例。
-7. `[pending]` 实现 OpenAI Provider Adapter 最小接口草案。
+7. `[partial]` 实现 OpenAI Provider Adapter 最小接口草案。
 8. `[partial]` 验证项目快照和恢复策略。
 9. `[done]` 更新 `docs/design-docs/technology-decisions.md`。
 10. `[done]` 更新 `docs/generated/db-schema.md`。
@@ -221,7 +221,7 @@ active
 仍未完成：
 
 - OpenAI Provider Adapter 仍未实现；正式向量检索方案仍未确定。
-- 复杂关系路径查询、专用图数据库打包、多数据库快照一致性仍未验证。
+- 专用图数据库打包、多数据库快照一致性仍未验证；复杂关系路径查询仅完成最小 SQLite recursive CTE 样例。
 - 当前仅验证单 SQLite 文件快照恢复；正式快照元数据策略仍未确定。
 
 ### 2026-05-10 本地向量索引原型
@@ -253,6 +253,61 @@ active
 - 向量条目仍是派生数据，不是正式事实源。
 - 当前 embedding 只是本地可复刻 spike，不代表正式语义召回质量。
 - OpenAI embedding API、嵌入式向量库、SQLite 向量扩展、索引体积增长和召回误命中风险仍未验证。
+
+### 2026-05-10 OpenAI Provider Adapter 边界原型
+
+变更范围：
+
+- `spikes/tauri-minimal/src-tauri/src/lib.rs`
+- `spikes/tauri-minimal/src/main.ts`
+- `spikes/tauri-minimal/src/styles.css`
+- `spikes/tauri-minimal/index.html`
+
+运行结果：
+
+- 新增 Tauri command：`run_openai_provider_adapter_spike`。
+- 原型构造 Provider Adapter request draft，包含 provider name、request kind、model、context scope 和 redacted request summary。
+- 原型只检查 `OPENAI_API_KEY` 是否存在，不读取、不展示、不记录 key 内容。
+- 原型返回 candidate 状态，明确不写入正式事实库。
+- 新增单元测试验证 provider 边界、安全字段和候选态约束。
+- `cargo test` 成功，6 个测试通过。
+- `cargo fmt --check` 成功。
+- `npm.cmd run build` 成功。
+- `npm.cmd run tauri build -- --no-bundle` 成功，接入 Provider Adapter 边界命令后 release exe 体积约 10.45 MiB。
+
+当前结论：
+
+- OpenAI Provider Adapter 最小接口草案已验证。
+- 当前没有发起真实 OpenAI API 请求，也没有引入 OpenAI SDK。
+- streaming、错误映射、重试、模型配置、token 统计、真实响应解析和 API key 安全存储仍未验证。
+
+### 2026-05-10 关系路径查询原型
+
+变更范围：
+
+- `spikes/tauri-minimal/src-tauri/src/lib.rs`
+- `spikes/tauri-minimal/src/main.ts`
+- `spikes/tauri-minimal/src/styles.css`
+- `spikes/tauri-minimal/index.html`
+
+运行结果：
+
+- 新增 Tauri command：`run_relationship_path_spike`。
+- Tauri SQLite schema 新增 `graph_edges` 表和查询索引。
+- demo seed 新增组织实体 `StarGuard` 和 confirmed 图边：`KNOWS`、`MEMBER_OF`、`OWNS`、`LOCATED_AT`。
+- 使用 SQLite recursive CTE 查询 `LinChe -> QinYuan -> StarGuard -> StarKey` 三跳关系路径。
+- 查询结果包含实体路径、边类型路径、来源事件和路径摘要。
+- 新增单元测试验证多跳路径可查，反向无路径时返回空结果。
+- `cargo test` 成功，7 个测试通过。
+- `cargo fmt --check` 成功。
+- `npm.cmd run build` 成功。
+- `npm.cmd run tauri build -- --no-bundle` 成功，接入关系路径查询命令后 release exe 体积约 10.46 MiB。
+
+当前结论：
+
+- SQLite 自建节点/边模型可以支持一个最小多跳关系路径查询样例。
+- 该验证支持继续保留 SQLite graph fallback 方向。
+- 尚未验证更大图谱下的路径排序、性能、环路策略、关系过滤 DSL 和专用图数据库打包。
 
 ### 2026-05-08 SQLite 状态图谱原型
 
@@ -331,4 +386,4 @@ active
 
 当技术栈、数据层组合和状态机最小模型都有明确通过或回退结论时，本计划可以归档。
 
-当前尚未满足退出条件：正式向量检索方案、OpenAI Provider Adapter、复杂关系路径查询、通用变更模型、专用图数据库打包和多数据库快照一致性仍未验证。
+当前尚未满足退出条件：正式向量检索方案、OpenAI Provider Adapter 真实调用链、通用变更模型、专用图数据库打包、复杂图查询性能和多数据库快照一致性仍未验证。

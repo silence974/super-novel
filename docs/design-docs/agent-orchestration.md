@@ -71,6 +71,12 @@
 - `generate_repair_patch(input)`
 - `embed_text(input)`
 
+当前 Spike 结论：
+
+- `spikes/tauri-minimal` 已验证一个最小 Provider Adapter 边界：provider name、request kind、model、context scope、redacted request summary 和 candidate response contract。
+- 该 spike 不发起真实 OpenAI API 请求，不引入 OpenAI SDK，不验证 streaming、重试、错误映射或真实响应解析。
+- Adapter 输出仍必须作为候选，不得直接写入正式事实库。
+
 ## 上下文策略
 
 - 不默认发送整个作品。

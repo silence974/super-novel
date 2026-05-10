@@ -126,8 +126,10 @@
 - 已验证检查：同一角色重叠地点冲突、同一道具重叠持有者冲突。
 - 已验证隔离：`candidate` fact 不进入 confirmed 检查链。
 - 已验证流程：最小增量影响范围流程已在 `spikes/tauri-minimal` 中通过“变更事实 -> 影响范围 -> 规则子集 -> 预览补丁 -> 回滚”验证。
-- 该验证只覆盖最小影响范围闭环，不代表复杂关系路径查询或通用变更模型已经完成。
-- 尚未验证：复杂关系路径查询、通用变更模型、专用嵌入式图数据库打包。
+- 已验证查询：`spikes/tauri-minimal` 已通过 SQLite recursive CTE 验证 `LinChe -> QinYuan -> StarGuard -> StarKey` 的三跳关系路径查询。
+- 2026-05-10：`npm run tauri build -- --no-bundle` 通过，接入关系路径查询命令后 release exe 约 10.46 MiB。
+- 该验证只覆盖最小影响范围闭环和一个多跳路径样例，不代表通用图查询模型已经完成。
+- 尚未验证：通用变更模型、专用嵌入式图数据库打包、复杂图查询性能和更大图谱下的路径排序策略。
 
 ## TD-004 向量检索
 
@@ -160,7 +162,7 @@
 
 ## TD-005 AI Provider
 
-状态：`proposed`
+状态：`spiking`
 
 首期：OpenAI API。
 
@@ -169,6 +171,20 @@
 - 通过 Provider Adapter 调用。
 - 支持 `api_key` 配置。
 - 不把 OpenAI SDK 调用散落到业务层。
+
+本地验证记录：
+
+- 2026-05-10：`spikes/tauri-minimal` 新增 Tauri command `run_openai_provider_adapter_spike`。
+- 2026-05-10：已验证 Provider Adapter 最小边界：业务层使用 provider name、request kind、model、context scope 和 redacted request summary，不暴露 API key。
+- 2026-05-10：adapter draft 只返回 candidate 状态，不写入正式事实库。
+- 2026-05-10：`cargo test` 通过，新增测试覆盖 API key 不进入报告/日志、响应保持候选态、provider 不直接写正式事实库。
+- 2026-05-10：`npm run tauri build -- --no-bundle` 通过，接入 Provider Adapter 边界命令后 release exe 约 10.45 MiB。
+
+当前结论：
+
+- OpenAI Provider Adapter 的最小接口边界已验证。
+- 当前未发起真实 OpenAI API 请求，未引入 OpenAI SDK，也未验证 streaming、错误映射、重试、模型配置、token 统计或真实响应解析。
+- 正式实现应以 OpenAI Responses API 承载文本生成类任务，以 Embeddings API 承载 embedding 生成，并继续保持业务层不直接依赖具体 SDK。
 
 ## 参考资料
 

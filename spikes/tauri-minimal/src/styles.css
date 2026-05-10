@@ -102,7 +102,9 @@ button:disabled {
 .database-card,
 .incremental-card,
 .snapshot-card,
-.vector-card {
+.vector-card,
+.provider-card,
+.relationship-card {
   border: 1px solid rgba(23, 33, 47, 0.11);
   border-radius: 22px;
   padding: 20px;
@@ -113,7 +115,9 @@ button:disabled {
 .database-card,
 .incremental-card,
 .snapshot-card,
-.vector-card {
+.vector-card,
+.provider-card,
+.relationship-card {
   margin-top: 18px;
 }
 

@@ -34,6 +34,13 @@
 - 不把 API key 写入项目导出。
 - 支持后续 Provider Adapter 扩展。
 
+当前 Spike 结论：
+
+- 已验证 OpenAI Provider Adapter 的最小前后端边界。
+- 验证台只展示 API key 是否已配置，不展示 key 内容。
+- Provider 返回默认仍为候选态，不直接覆盖正文或写入正式事实库。
+- 真实 OpenAI API 调用、模型配置、streaming 和响应解析仍待实现。
+
 ## 候选事实确认流
 
 1. 用户触发抽取。

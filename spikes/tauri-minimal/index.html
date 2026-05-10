@@ -23,6 +23,8 @@
           <button id="run-incremental-spike" type="button">Run incremental preview</button>
           <button id="run-snapshot-spike" type="button">Run snapshot restore</button>
           <button id="run-vector-spike" type="button">Run vector search spike</button>
+          <button id="run-provider-spike" type="button">Run provider adapter spike</button>
+          <button id="run-relationship-spike" type="button">Run relationship path spike</button>
         </div>
       </section>
 
@@ -61,6 +63,16 @@
           <span class="label">Vector Index</span>
           <strong id="vector-entry-count">0</strong>
           <small id="vector-model">Not indexed</small>
+        </article>
+        <article class="card">
+          <span class="label">AI Provider</span>
+          <strong id="provider-name">Not run</strong>
+          <small id="provider-api-key">No provider checked</small>
+        </article>
+        <article class="card">
+          <span class="label">Relation Path</span>
+          <strong id="relationship-hop-count">0</strong>
+          <small id="relationship-status">Not searched</small>
         </article>
       </section>
 
@@ -146,6 +158,65 @@
           <div>
             <span>Updated text</span>
             <code id="vector-updated-text">None</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="provider-card">
+        <div class="section-header">
+          <div>
+            <span class="label">OpenAI Provider Adapter</span>
+            <h2>Request boundary and candidate response contract</h2>
+          </div>
+          <code id="provider-request-kind">Not run</code>
+        </div>
+        <div class="scope-grid">
+          <div>
+            <span>Model</span>
+            <code id="provider-model">None</code>
+          </div>
+          <div>
+            <span>Text API</span>
+            <code id="provider-text-api">None</code>
+          </div>
+          <div>
+            <span>Embedding API</span>
+            <code id="provider-embedding-api">None</code>
+          </div>
+          <div>
+            <span>Candidate status</span>
+            <code id="provider-candidate-status">None</code>
+          </div>
+          <div>
+            <span>Safety flags</span>
+            <code id="provider-safety">None</code>
+          </div>
+        </div>
+        <p id="provider-request-summary">No provider request draft generated yet.</p>
+        <code id="provider-context-scope">No context scope</code>
+      </section>
+
+      <section class="relationship-card">
+        <div class="section-header">
+          <div>
+            <span class="label">Relationship Path</span>
+            <h2>Recursive graph query over confirmed edges</h2>
+          </div>
+          <code id="relationship-query">Not run</code>
+        </div>
+        <p id="relationship-summary">No relationship path searched yet.</p>
+        <div class="scope-grid">
+          <div>
+            <span>Entities</span>
+            <code id="relationship-entities">None</code>
+          </div>
+          <div>
+            <span>Edges</span>
+            <code id="relationship-edges">None</code>
+          </div>
+          <div>
+            <span>Source events</span>
+            <code id="relationship-sources">None</code>
           </div>
         </div>
       </section>

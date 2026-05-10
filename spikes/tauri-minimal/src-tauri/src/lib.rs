@@ -102,6 +102,38 @@ struct VectorSearchReport {
     initial_index_rebuilt: bool,
 }
 
+#[derive(Serialize)]
+struct OpenAiProviderAdapterReport {
+    provider_name: String,
+    text_generation_api: String,
+    embedding_api: String,
+    api_key_env_var: String,
+    api_key_present: bool,
+    request_kind: String,
+    model: String,
+    context_scope: Vec<String>,
+    redacted_request_summary: String,
+    candidate_status: String,
+    response_would_be_candidate: bool,
+    writes_to_fact_store: bool,
+    logs_include_api_key: bool,
+}
+
+#[derive(Serialize)]
+struct RelationshipPathReport {
+    database_path: String,
+    start_entity_id: String,
+    target_entity_id: String,
+    world_tick: i64,
+    max_depth: i64,
+    path_found: bool,
+    hop_count: usize,
+    entity_path: Vec<String>,
+    edge_path: Vec<String>,
+    source_event_ids: Vec<String>,
+    path_summary: String,
+}
+
 #[derive(Clone)]
 struct FactScopeRow {
     id: String,
@@ -166,6 +198,20 @@ ON facts(fact_type, subject_entity_id, object_entity_id, valid_from_tick, valid_
 CREATE INDEX IF NOT EXISTS idx_check_results_status
 ON check_results(severity, status);
 
+CREATE TABLE IF NOT EXISTS graph_edges (
+  id TEXT PRIMARY KEY,
+  edge_type TEXT NOT NULL,
+  from_entity_id TEXT NOT NULL REFERENCES entities(id),
+  to_entity_id TEXT NOT NULL REFERENCES entities(id),
+  valid_from_tick INTEGER NOT NULL,
+  valid_to_tick INTEGER,
+  source_event_id TEXT REFERENCES events(id),
+  status TEXT NOT NULL CHECK (status IN ('candidate', 'confirmed', 'deprecated'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_lookup
+ON graph_edges(from_entity_id, to_entity_id, edge_type, valid_from_tick, valid_to_tick, status);
+
 CREATE TABLE IF NOT EXISTS vector_entries (
   id TEXT PRIMARY KEY,
   source_type TEXT NOT NULL,
@@ -228,6 +274,22 @@ fn run_vector_search_spike() -> Result<VectorSearchReport, String> {
     run_vector_search_at(&conn, db_path.display().to_string())
 }
 
+#[tauri::command]
+fn run_openai_provider_adapter_spike() -> Result<OpenAiProviderAdapterReport, String> {
+    run_openai_provider_adapter_report()
+}
+
+#[tauri::command]
+fn run_relationship_path_spike() -> Result<RelationshipPathReport, String> {
+    let db_path = default_project_db_path()?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    let conn = Connection::open(&db_path).map_err(|error| error.to_string())?;
+    run_relationship_path_at(&conn, db_path.display().to_string())
+}
+
 fn run_state_graph_report(
     conn: &Connection,
     database_path: String,
@@ -279,6 +341,202 @@ fn run_state_graph_report(
         check_results_written,
         candidate_facts_ignored_by_checks,
     })
+}
+
+fn run_openai_provider_adapter_report() -> Result<OpenAiProviderAdapterReport, String> {
+    let request = ProviderRequestDraft {
+        request_kind: "generate_repair_patch".into(),
+        model: "configured-openai-text-model".into(),
+        context_scope: vec![
+            "chapter:chapter-2".into(),
+            "event:event-tower".into(),
+            "check_result:state.location.exclusive".into(),
+        ],
+        user_visible_task: "Generate a candidate repair patch for one selected location conflict."
+            .into(),
+    };
+    let api_key_present = std::env::var_os("OPENAI_API_KEY").is_some();
+
+    Ok(OpenAiProviderAdapterReport {
+        provider_name: "openai".into(),
+        text_generation_api: "Responses API".into(),
+        embedding_api: "Embeddings API".into(),
+        api_key_env_var: "OPENAI_API_KEY".into(),
+        api_key_present,
+        request_kind: request.request_kind,
+        model: request.model,
+        context_scope: request.context_scope,
+        redacted_request_summary: format!(
+            "{} Context items: 3. API key omitted from report and logs.",
+            request.user_visible_task
+        ),
+        candidate_status: "candidate".into(),
+        response_would_be_candidate: true,
+        writes_to_fact_store: false,
+        logs_include_api_key: false,
+    })
+}
+
+fn run_relationship_path_at(
+    conn: &Connection,
+    database_path: String,
+) -> Result<RelationshipPathReport, String> {
+    conn.execute_batch(SCHEMA)
+        .map_err(|error| error.to_string())?;
+    let _ = create_fts_table(conn)?;
+    let _ = ensure_seeded(conn)?;
+
+    let start_entity_id = "char-lin";
+    let target_entity_id = "item-key";
+    let world_tick = 1030;
+    let max_depth = 4;
+    let result = relationship_path(
+        conn,
+        start_entity_id,
+        target_entity_id,
+        world_tick,
+        max_depth,
+    )?;
+
+    Ok(RelationshipPathReport {
+        database_path,
+        start_entity_id: start_entity_id.into(),
+        target_entity_id: target_entity_id.into(),
+        world_tick,
+        max_depth,
+        path_found: result.is_some(),
+        hop_count: result
+            .as_ref()
+            .map(|path| path.edge_path.len())
+            .unwrap_or(0),
+        entity_path: result
+            .as_ref()
+            .map(|path| path.entity_path.clone())
+            .unwrap_or_default(),
+        edge_path: result
+            .as_ref()
+            .map(|path| path.edge_path.clone())
+            .unwrap_or_default(),
+        source_event_ids: result
+            .as_ref()
+            .map(|path| path.source_event_ids.clone())
+            .unwrap_or_default(),
+        path_summary: result
+            .map(|path| path.summary())
+            .unwrap_or_else(|| "No relationship path found.".into()),
+    })
+}
+
+#[derive(Clone)]
+struct RelationshipPath {
+    entity_path: Vec<String>,
+    edge_path: Vec<String>,
+    source_event_ids: Vec<String>,
+}
+
+impl RelationshipPath {
+    fn summary(&self) -> String {
+        if self.entity_path.is_empty() {
+            return "No relationship path found.".into();
+        }
+
+        let mut summary = self.entity_path[0].clone();
+        for (index, edge_type) in self.edge_path.iter().enumerate() {
+            if let Some(next_entity) = self.entity_path.get(index + 1) {
+                summary.push_str(&format!(" -[{edge_type}]-> {next_entity}"));
+            }
+        }
+        summary
+    }
+}
+
+fn relationship_path(
+    conn: &Connection,
+    start_entity_id: &str,
+    target_entity_id: &str,
+    world_tick: i64,
+    max_depth: i64,
+) -> Result<Option<RelationshipPath>, String> {
+    conn.query_row(
+        r#"
+WITH RECURSIVE relationship_path(
+  depth,
+  current_entity_id,
+  entity_ids,
+  entity_names,
+  edge_types,
+  source_event_ids
+) AS (
+  SELECT
+    0,
+    e.id,
+    '|' || e.id || '|',
+    e.name,
+    '',
+    ''
+  FROM entities e
+  WHERE e.id = ?1
+
+  UNION ALL
+
+  SELECT
+    relationship_path.depth + 1,
+    edge.to_entity_id,
+    relationship_path.entity_ids || edge.to_entity_id || '|',
+    relationship_path.entity_names || '|' || target.name,
+    CASE
+      WHEN relationship_path.edge_types = '' THEN edge.edge_type
+      ELSE relationship_path.edge_types || '|' || edge.edge_type
+    END,
+    CASE
+      WHEN relationship_path.source_event_ids = '' THEN COALESCE(edge.source_event_id, '')
+      ELSE relationship_path.source_event_ids || '|' || COALESCE(edge.source_event_id, '')
+    END
+  FROM relationship_path
+  JOIN graph_edges edge ON edge.from_entity_id = relationship_path.current_entity_id
+  JOIN entities target ON target.id = edge.to_entity_id
+  WHERE relationship_path.depth < ?4
+    AND edge.status = 'confirmed'
+    AND edge.valid_from_tick <= ?3
+    AND (edge.valid_to_tick IS NULL OR ?3 < edge.valid_to_tick)
+    AND instr(relationship_path.entity_ids, '|' || edge.to_entity_id || '|') = 0
+)
+SELECT entity_names, edge_types, source_event_ids
+FROM relationship_path
+WHERE current_entity_id = ?2
+  AND depth > 0
+ORDER BY depth
+LIMIT 1
+"#,
+        (start_entity_id, target_entity_id, world_tick, max_depth),
+        |row| {
+            let entity_names: String = row.get(0)?;
+            let edge_types: String = row.get(1)?;
+            let source_event_ids: String = row.get(2)?;
+            Ok(RelationshipPath {
+                entity_path: split_path(&entity_names),
+                edge_path: split_path(&edge_types),
+                source_event_ids: split_path(&source_event_ids),
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| error.to_string())
+}
+
+fn split_path(value: &str) -> Vec<String> {
+    value
+        .split('|')
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+struct ProviderRequestDraft {
+    request_kind: String,
+    model: String,
+    context_scope: Vec<String>,
+    user_visible_task: String,
 }
 
 fn run_vector_search_at(
@@ -941,7 +1199,8 @@ INSERT OR IGNORE INTO entities (id, entity_type, name) VALUES
   ('char-qin', 'character', 'QinYuan'),
   ('loc-town', 'location', 'QingshiTown'),
   ('loc-tower', 'location', 'BlackTower'),
-  ('item-key', 'item', 'StarKey');
+  ('item-key', 'item', 'StarKey'),
+  ('org-star-guard', 'organization', 'StarGuard');
 
 INSERT OR IGNORE INTO chapters (id, title, order_index, content) VALUES
   ('chapter-1', 'Arrival', 1, 'LinChe arrives in QingshiTown.'),
@@ -965,6 +1224,15 @@ INSERT OR IGNORE INTO facts (
   ('fact-lin-key', 'holds', 'char-lin', 'item-key', '', 1020, 1050, 'event-tower', 'confirmed'),
   ('fact-qin-key', 'holds', 'char-qin', 'item-key', '', 1025, 1040, 'event-tower', 'confirmed'),
   ('fact-candidate-ability', 'ability_state', 'char-lin', NULL, 'Candidate bloodline awakening', 1030, NULL, 'event-candidate', 'candidate');
+
+INSERT OR IGNORE INTO graph_edges (
+  id, edge_type, from_entity_id, to_entity_id, valid_from_tick, valid_to_tick, source_event_id, status
+) VALUES
+  ('edge-lin-knows-qin', 'KNOWS', 'char-lin', 'char-qin', 900, NULL, 'event-flashback', 'confirmed'),
+  ('edge-qin-member-guard', 'MEMBER_OF', 'char-qin', 'org-star-guard', 950, NULL, 'event-flashback', 'confirmed'),
+  ('edge-guard-owns-key', 'OWNS', 'org-star-guard', 'item-key', 960, NULL, 'event-tower', 'confirmed'),
+  ('edge-lin-located-town', 'LOCATED_AT', 'char-lin', 'loc-town', 1000, 1030, 'event-town', 'confirmed'),
+  ('edge-lin-located-tower', 'LOCATED_AT', 'char-lin', 'loc-tower', 1010, 1040, 'event-tower', 'confirmed');
 "#,
     )
     .map_err(|error| error.to_string())?;
@@ -1419,6 +1687,55 @@ mod tests {
 
         let _ = fs::remove_file(&db_path);
     }
+
+    #[test]
+    fn openai_provider_adapter_report_keeps_security_boundary() {
+        let report =
+            run_openai_provider_adapter_report().expect("provider adapter spike should run");
+
+        assert_eq!(report.provider_name, "openai");
+        assert_eq!(report.text_generation_api, "Responses API");
+        assert_eq!(report.embedding_api, "Embeddings API");
+        assert_eq!(report.api_key_env_var, "OPENAI_API_KEY");
+        assert_eq!(report.request_kind, "generate_repair_patch");
+        assert_eq!(report.candidate_status, "candidate");
+        assert!(report.response_would_be_candidate);
+        assert!(!report.writes_to_fact_store);
+        assert!(!report.logs_include_api_key);
+        assert!(report.redacted_request_summary.contains("API key omitted"));
+        assert_eq!(report.context_scope.len(), 3);
+    }
+
+    #[test]
+    fn relationship_path_finds_multi_hop_relation() {
+        let db_path = std::env::temp_dir().join(format!(
+            "super-novel-tauri-spike-relationship-path-test-{}.db",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("test database should open");
+        let report = run_relationship_path_at(&conn, db_path.display().to_string())
+            .expect("relationship path spike should run");
+
+        assert!(report.path_found);
+        assert_eq!(report.start_entity_id, "char-lin");
+        assert_eq!(report.target_entity_id, "item-key");
+        assert_eq!(report.hop_count, 3);
+        assert_eq!(
+            report.entity_path,
+            vec!["LinChe", "QinYuan", "StarGuard", "StarKey"]
+        );
+        assert_eq!(report.edge_path, vec!["KNOWS", "MEMBER_OF", "OWNS"]);
+        assert!(report.source_event_ids.contains(&"event-tower".to_string()));
+        assert!(report.path_summary.contains("LinChe -[KNOWS]-> QinYuan"));
+
+        let missing_path = relationship_path(&conn, "item-key", "char-lin", 1030, 4)
+            .expect("reverse path query should run");
+        assert!(missing_path.is_none());
+
+        let _ = fs::remove_file(&db_path);
+    }
 }
 
 #[cfg(test)]
@@ -1439,7 +1756,9 @@ pub fn run() {
             run_project_database_spike,
             run_incremental_check_spike,
             run_snapshot_restore_spike,
-            run_vector_search_spike
+            run_vector_search_spike,
+            run_openai_provider_adapter_spike,
+            run_relationship_path_spike
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

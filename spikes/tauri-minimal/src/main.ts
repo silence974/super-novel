@@ -88,6 +88,36 @@ type VectorSearchReport = {
   initial_index_rebuilt: boolean;
 };
 
+type OpenAiProviderAdapterReport = {
+  provider_name: string;
+  text_generation_api: string;
+  embedding_api: string;
+  api_key_env_var: string;
+  api_key_present: boolean;
+  request_kind: string;
+  model: string;
+  context_scope: string[];
+  redacted_request_summary: string;
+  candidate_status: string;
+  response_would_be_candidate: boolean;
+  writes_to_fact_store: boolean;
+  logs_include_api_key: boolean;
+};
+
+type RelationshipPathReport = {
+  database_path: string;
+  start_entity_id: string;
+  target_entity_id: string;
+  world_tick: number;
+  max_depth: number;
+  path_found: boolean;
+  hop_count: number;
+  entity_path: string[];
+  edge_path: string[];
+  source_event_ids: string[];
+  path_summary: string;
+};
+
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.querySelector<T>(`#${id}`);
   if (!element) {
@@ -317,6 +347,74 @@ async function runVectorSearchSpike() {
   }
 }
 
+function renderProviderReport(report: OpenAiProviderAdapterReport) {
+  byId("provider-name").textContent = report.provider_name;
+  byId("provider-api-key").textContent = report.api_key_present
+    ? `${report.api_key_env_var}: present`
+    : `${report.api_key_env_var}: not configured`;
+  byId("provider-request-kind").textContent = report.request_kind;
+  byId("provider-model").textContent = report.model;
+  byId("provider-text-api").textContent = report.text_generation_api;
+  byId("provider-embedding-api").textContent = report.embedding_api;
+  byId("provider-context-scope").textContent = report.context_scope.join(", ");
+  byId("provider-request-summary").textContent = report.redacted_request_summary;
+  byId("provider-candidate-status").textContent = report.candidate_status;
+  byId("provider-safety").textContent =
+    `candidate=${report.response_would_be_candidate}, writes=${report.writes_to_fact_store}, logs_key=${report.logs_include_api_key}`;
+}
+
+async function runProviderAdapterSpike() {
+  const button = byId<HTMLButtonElement>("run-provider-spike");
+  const originalText = button.textContent ?? "Run provider adapter spike";
+  button.disabled = true;
+  button.textContent = "Checking...";
+  try {
+    const report = await invoke<OpenAiProviderAdapterReport>(
+      "run_openai_provider_adapter_spike",
+    );
+    renderProviderReport(report);
+  } catch (error) {
+    byId("provider-name").textContent = "error";
+    byId("provider-request-summary").textContent = String(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+function renderRelationshipPathReport(report: RelationshipPathReport) {
+  byId("relationship-hop-count").textContent = String(report.hop_count);
+  byId("relationship-status").textContent = report.path_found
+    ? "path found"
+    : "no path";
+  byId("relationship-query").textContent =
+    `${report.start_entity_id} -> ${report.target_entity_id} @ ${report.world_tick}`;
+  byId("relationship-summary").textContent = report.path_summary;
+  byId("relationship-entities").textContent = report.entity_path.join(" -> ");
+  byId("relationship-edges").textContent = report.edge_path.join(" -> ");
+  byId("relationship-sources").textContent = report.source_event_ids.join(", ");
+  byId("database-path").textContent = report.database_path;
+}
+
+async function runRelationshipPathSpike() {
+  const button = byId<HTMLButtonElement>("run-relationship-spike");
+  const originalText = button.textContent ?? "Run relationship path spike";
+  button.disabled = true;
+  button.textContent = "Searching...";
+  try {
+    const report = await invoke<RelationshipPathReport>(
+      "run_relationship_path_spike",
+    );
+    renderRelationshipPathReport(report);
+  } catch (error) {
+    byId("relationship-status").textContent = "error";
+    byId("relationship-summary").textContent = String(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   byId<HTMLButtonElement>("run-memory-spike").addEventListener("click", () =>
     runSpike("run_state_graph_spike", "run-memory-spike"),
@@ -335,5 +433,13 @@ window.addEventListener("DOMContentLoaded", () => {
   byId<HTMLButtonElement>("run-vector-spike").addEventListener(
     "click",
     runVectorSearchSpike,
+  );
+  byId<HTMLButtonElement>("run-provider-spike").addEventListener(
+    "click",
+    runProviderAdapterSpike,
+  );
+  byId<HTMLButtonElement>("run-relationship-spike").addEventListener(
+    "click",
+    runRelationshipPathSpike,
   );
 });

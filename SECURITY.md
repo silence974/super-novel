@@ -78,3 +78,5 @@ Markdown 导出只包含用户选择的作品正文和必要标题结构。
 - Provider 实现不得绕过统一日志策略。
 - Provider 实现不得直接写入正式事实库。
 - Provider 响应必须经过解析、标记和用户确认。
+- Provider Adapter 的本地 spike 只验证请求边界和候选态约束，不发起真实 OpenAI API 请求。
+- 任何 provider 报告、日志或前端状态只能展示 API key 是否已配置，不能展示 key 内容。

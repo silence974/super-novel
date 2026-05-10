@@ -8,6 +8,22 @@
 - The local deterministic keyword embedding is only a repeatable spike stand-in. It is not the final embedding model and does not validate production semantic recall quality.
 - OpenAI embeddings, embedded vector database packaging, SQLite vector extensions, index growth, and false-positive recall risk remain open.
 
+## 2026-05-10 OpenAI provider adapter addendum
+
+- Added Tauri command: `run_openai_provider_adapter_spike`.
+- Verified the minimal provider boundary without making a real network request.
+- The spike reports provider name, request kind, model, context scope, redacted request summary, and candidate response status.
+- The spike only reports whether `OPENAI_API_KEY` is configured. It never returns the key value to the frontend.
+- Real OpenAI API calls, SDK integration, streaming, retries, error mapping, token accounting, and response parsing remain open.
+
+## 2026-05-10 relationship path addendum
+
+- Added Tauri command: `run_relationship_path_spike`.
+- Added a `graph_edges` table to the Tauri spike schema.
+- Seeded a confirmed three-hop relation path: `LinChe -[KNOWS]-> QinYuan -[MEMBER_OF]-> StarGuard -[OWNS]-> StarKey`.
+- Verified the path with a SQLite recursive CTE and returned entity names, edge types, source events, and a display summary.
+- Larger graph performance, path ranking, relationship filtering DSL, and dedicated graph database packaging remain open.
+
 ## 目的
 
 验证 `Tauri v2 + Rust backend + WebView2` 是否适合作为 `super-novel` 的 Windows 桌面端基础。

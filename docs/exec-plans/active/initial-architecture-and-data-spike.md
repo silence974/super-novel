@@ -40,7 +40,7 @@ active
 2. `[done]` 验证 SQLite 存储章节、事件、检查结果和快照。
 3. `[in-progress]` 对比嵌入式图数据库与 SQLite 自建图模型。
 4. `[partial]` 验证角色位置链、道具持有链和关系路径查询。
-5. `[pending]` 验证向量索引写入、更新和语义查询。
+5. `[partial]` 验证向量索引写入、更新和语义查询。
 6. `[partial]` 设计并验证时间域和时间流速映射样例。
 7. `[pending]` 实现 OpenAI Provider Adapter 最小接口草案。
 8. `[partial]` 验证项目快照和恢复策略。
@@ -220,9 +220,39 @@ active
 
 仍未完成：
 
-- 向量检索和 OpenAI Provider Adapter 仍未实现。
+- OpenAI Provider Adapter 仍未实现；正式向量检索方案仍未确定。
 - 复杂关系路径查询、专用图数据库打包、多数据库快照一致性仍未验证。
 - 当前仅验证单 SQLite 文件快照恢复；正式快照元数据策略仍未确定。
+
+### 2026-05-10 本地向量索引原型
+
+变更范围：
+
+- `spikes/tauri-minimal/src-tauri/src/lib.rs`
+- `spikes/tauri-minimal/src/main.ts`
+- `spikes/tauri-minimal/src/styles.css`
+- `spikes/tauri-minimal/index.html`
+
+运行结果：
+
+- 新增 Tauri command：`run_vector_search_spike`。
+- 新增 SQLite 派生表：`vector_entries`。
+- 原型为章节、事件、实体和 confirmed fact 生成本地 deterministic keyword embedding。
+- 命令可重建向量索引。
+- 命令可在 SQLite savepoint 内预览更新单个 source 的向量条目，执行后回滚 source 和派生索引变更。
+- 命令可对查询 `StarKey BlackTower` 执行余弦相似度检索。
+- 新增单元测试验证写入、更新和查询闭环。
+- `cargo test` 成功，5 个测试通过。
+- `cargo fmt --check` 成功。
+- `npm.cmd run build` 成功。
+- `npm.cmd run tauri build -- --no-bundle` 成功，接入向量检索命令后 release exe 体积约 10.43 MiB。
+
+当前结论：
+
+- 最小向量索引写入、更新预览和查询流程已验证。
+- 向量条目仍是派生数据，不是正式事实源。
+- 当前 embedding 只是本地可复刻 spike，不代表正式语义召回质量。
+- OpenAI embedding API、嵌入式向量库、SQLite 向量扩展、索引体积增长和召回误命中风险仍未验证。
 
 ### 2026-05-08 SQLite 状态图谱原型
 
@@ -301,4 +331,4 @@ active
 
 当技术栈、数据层组合和状态机最小模型都有明确通过或回退结论时，本计划可以归档。
 
-当前尚未满足退出条件：向量检索、OpenAI Provider Adapter、复杂关系路径查询、通用变更模型、专用图数据库打包和多数据库快照一致性仍未验证。
+当前尚未满足退出条件：正式向量检索方案、OpenAI Provider Adapter、复杂关系路径查询、通用变更模型、专用图数据库打包和多数据库快照一致性仍未验证。

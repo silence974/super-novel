@@ -68,6 +68,26 @@ type SnapshotRestoreReport = {
   restore_succeeded: boolean;
 };
 
+type VectorSearchHit = {
+  entry_id: string;
+  source_type: string;
+  source_id: string;
+  chunk_text: string;
+  similarity: number;
+};
+
+type VectorSearchReport = {
+  database_path: string;
+  embedding_model: string;
+  query: string;
+  entries_written: number;
+  before_update_hits: VectorSearchHit[];
+  updated_source_id: string;
+  updated_chunk_text: string;
+  after_update_hits: VectorSearchHit[];
+  initial_index_rebuilt: boolean;
+};
+
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.querySelector<T>(`#${id}`);
   if (!element) {
@@ -255,6 +275,48 @@ async function runSnapshotSpike() {
   }
 }
 
+function renderVectorHits(targetId: string, rows: VectorSearchHit[]) {
+  const list = byId<HTMLUListElement>(targetId);
+  list.innerHTML = "";
+  for (const row of rows) {
+    const item = document.createElement("li");
+    item.innerHTML = `
+      <strong>${row.source_type}:${row.source_id}</strong>
+      <span>${row.chunk_text}</span>
+      <code>score=${row.similarity.toFixed(3)}</code>
+    `;
+    list.appendChild(item);
+  }
+}
+
+function renderVectorSearchReport(report: VectorSearchReport) {
+  byId("vector-entry-count").textContent = String(report.entries_written);
+  byId("vector-model").textContent = report.embedding_model;
+  byId("vector-query").textContent = report.query;
+  byId("vector-updated-source").textContent = report.updated_source_id;
+  byId("vector-updated-text").textContent = report.updated_chunk_text;
+  byId("database-path").textContent = report.database_path;
+  renderVectorHits("vector-before-hits", report.before_update_hits);
+  renderVectorHits("vector-after-hits", report.after_update_hits);
+}
+
+async function runVectorSearchSpike() {
+  const button = byId<HTMLButtonElement>("run-vector-spike");
+  const originalText = button.textContent ?? "Run vector search spike";
+  button.disabled = true;
+  button.textContent = "Indexing...";
+  try {
+    const report = await invoke<VectorSearchReport>("run_vector_search_spike");
+    renderVectorSearchReport(report);
+  } catch (error) {
+    byId("vector-entry-count").textContent = "0";
+    byId("vector-model").textContent = String(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   byId<HTMLButtonElement>("run-memory-spike").addEventListener("click", () =>
     runSpike("run_state_graph_spike", "run-memory-spike"),
@@ -269,5 +331,9 @@ window.addEventListener("DOMContentLoaded", () => {
   byId<HTMLButtonElement>("run-snapshot-spike").addEventListener(
     "click",
     runSnapshotSpike,
+  );
+  byId<HTMLButtonElement>("run-vector-spike").addEventListener(
+    "click",
+    runVectorSearchSpike,
   );
 });

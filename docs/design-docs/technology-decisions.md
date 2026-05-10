@@ -131,7 +131,7 @@
 
 ## TD-004 向量检索
 
-状态：`proposed`
+状态：`spiking`
 
 候选：
 
@@ -143,6 +143,20 @@
 
 - 向量结果不是正式事实源。
 - 索引必须可重建。
+
+本地验证记录：
+
+- 2026-05-10：`spikes/tauri-minimal` 新增 Tauri command `run_vector_search_spike`。
+- 2026-05-10：已在 SQLite 中创建 `vector_entries` 派生索引表，写入章节、事件、实体和 confirmed fact 的最小向量条目。
+- 2026-05-10：已用本地 deterministic keyword embedding 验证索引重建、savepoint 内单条 source 更新预览和余弦相似度查询。
+- 2026-05-10：`cargo test` 通过，新增测试覆盖向量条目写入、更新和查询；`npm run build` 通过，前端验证台可触发向量检索 spike。
+- 2026-05-10：`npm run tauri build -- --no-bundle` 通过，接入向量检索命令后 release exe 约 10.43 MiB。
+
+当前结论：
+
+- 最小“写入 -> 更新预览 -> 查询”向量索引流程已验证，可作为首期回退方案的形状参考。
+- 当前 embedding 只是可复刻的本地 spike 实现，不代表正式语义召回质量。
+- OpenAI embedding API、嵌入式向量库、SQLite 向量扩展、索引体积增长和召回误命中风险仍未验证。
 
 ## TD-005 AI Provider
 

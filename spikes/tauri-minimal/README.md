@@ -1,5 +1,13 @@
 # Tauri Minimal Spike
 
+## 2026-05-10 vector search addendum
+
+- Added Tauri command: `run_vector_search_spike`.
+- Added a derived SQLite `vector_entries` table in the Tauri spike schema.
+- Verified a minimal local vector flow: rebuild index, preview one source-entry update inside a SQLite savepoint, query by cosine similarity, then roll back the preview update.
+- The local deterministic keyword embedding is only a repeatable spike stand-in. It is not the final embedding model and does not validate production semantic recall quality.
+- OpenAI embeddings, embedded vector database packaging, SQLite vector extensions, index growth, and false-positive recall risk remain open.
+
 ## 目的
 
 验证 `Tauri v2 + Rust backend + WebView2` 是否适合作为 `super-novel` 的 Windows 桌面端基础。

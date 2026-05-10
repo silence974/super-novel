@@ -80,6 +80,28 @@ struct SnapshotRestoreReport {
     restore_succeeded: bool,
 }
 
+#[derive(Serialize)]
+struct VectorSearchHit {
+    entry_id: String,
+    source_type: String,
+    source_id: String,
+    chunk_text: String,
+    similarity: f32,
+}
+
+#[derive(Serialize)]
+struct VectorSearchReport {
+    database_path: String,
+    embedding_model: String,
+    query: String,
+    entries_written: usize,
+    before_update_hits: Vec<VectorSearchHit>,
+    updated_source_id: String,
+    updated_chunk_text: String,
+    after_update_hits: Vec<VectorSearchHit>,
+    initial_index_rebuilt: bool,
+}
+
 #[derive(Clone)]
 struct FactScopeRow {
     id: String,
@@ -143,7 +165,23 @@ ON facts(fact_type, subject_entity_id, object_entity_id, valid_from_tick, valid_
 
 CREATE INDEX IF NOT EXISTS idx_check_results_status
 ON check_results(severity, status);
+
+CREATE TABLE IF NOT EXISTS vector_entries (
+  id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  chunk_text TEXT NOT NULL,
+  embedding_model TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_entries_source
+ON vector_entries(source_type, source_id, embedding_model);
 "#;
+
+const LOCAL_VECTOR_MODEL: &str = "local-keyword-hash-v1";
+const VECTOR_DIMENSIONS: usize = 32;
 
 #[tauri::command]
 fn run_state_graph_spike() -> Result<StateGraphSpikeReport, String> {
@@ -177,6 +215,17 @@ fn run_incremental_check_spike() -> Result<IncrementalCheckReport, String> {
 fn run_snapshot_restore_spike() -> Result<SnapshotRestoreReport, String> {
     let db_path = default_project_db_path()?;
     run_snapshot_restore_at(&db_path)
+}
+
+#[tauri::command]
+fn run_vector_search_spike() -> Result<VectorSearchReport, String> {
+    let db_path = default_project_db_path()?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    let conn = Connection::open(&db_path).map_err(|error| error.to_string())?;
+    run_vector_search_at(&conn, db_path.display().to_string())
 }
 
 fn run_state_graph_report(
@@ -230,6 +279,307 @@ fn run_state_graph_report(
         check_results_written,
         candidate_facts_ignored_by_checks,
     })
+}
+
+fn run_vector_search_at(
+    conn: &Connection,
+    database_path: String,
+) -> Result<VectorSearchReport, String> {
+    conn.execute_batch(SCHEMA)
+        .map_err(|error| error.to_string())?;
+    let _ = create_fts_table(conn)?;
+    let _ = ensure_seeded(conn)?;
+
+    conn.execute(
+        "UPDATE chapters SET content = 'The StarKey appears near the BlackTower.' WHERE id = 'chapter-2'",
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+
+    rebuild_vector_index(conn)?;
+    let query = "StarKey BlackTower".to_string();
+    let before_update_hits = semantic_search(conn, &query, 8)?;
+
+    let updated_chunk_text = "A sealed relic is hidden under the old well.".to_string();
+    conn.execute_batch("SAVEPOINT vector_update_preview")
+        .map_err(|error| error.to_string())?;
+
+    let after_update_result = (|| {
+        conn.execute(
+            "UPDATE chapters SET content = ?1 WHERE id = 'chapter-2'",
+            [&updated_chunk_text],
+        )
+        .map_err(|error| error.to_string())?;
+        upsert_vector_entry(conn, "chapter", "chapter-2", &updated_chunk_text)?;
+        semantic_search(conn, &query, 8)
+    })();
+
+    conn.execute_batch("ROLLBACK TO vector_update_preview; RELEASE vector_update_preview")
+        .map_err(|error| error.to_string())?;
+
+    let after_update_hits = after_update_result?;
+    let entries_written = conn
+        .query_row(
+            "SELECT COUNT(*) FROM vector_entries WHERE embedding_model = ?1",
+            [LOCAL_VECTOR_MODEL],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())? as usize;
+
+    Ok(VectorSearchReport {
+        database_path,
+        embedding_model: LOCAL_VECTOR_MODEL.into(),
+        query,
+        entries_written,
+        before_update_hits,
+        updated_source_id: "chapter-2".into(),
+        updated_chunk_text,
+        after_update_hits,
+        initial_index_rebuilt: true,
+    })
+}
+
+fn rebuild_vector_index(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM vector_entries WHERE embedding_model = ?1",
+        [LOCAL_VECTOR_MODEL],
+    )
+    .map_err(|error| error.to_string())?;
+
+    for (source_type, source_id, chunk_text) in vector_source_rows(conn)? {
+        upsert_vector_entry(conn, &source_type, &source_id, &chunk_text)?;
+    }
+
+    Ok(())
+}
+
+fn vector_source_rows(conn: &Connection) -> Result<Vec<(String, String, String)>, String> {
+    let mut rows = Vec::new();
+
+    {
+        let mut statement = conn
+            .prepare("SELECT id, title, content FROM chapters ORDER BY order_index")
+            .map_err(|error| error.to_string())?;
+        let chapter_rows = statement
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let title: String = row.get(1)?;
+                let content: String = row.get(2)?;
+                Ok(("chapter".into(), id, format!("{title}. {content}")))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows.extend(chapter_rows);
+    }
+
+    {
+        let mut statement = conn
+            .prepare(
+                "SELECT id, title FROM events WHERE confirmation_status = 'confirmed' ORDER BY narrative_order",
+            )
+            .map_err(|error| error.to_string())?;
+        let event_rows = statement
+            .query_map([], |row| {
+                Ok((
+                    "event".into(),
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows.extend(event_rows);
+    }
+
+    {
+        let mut statement = conn
+            .prepare("SELECT id, entity_type, name FROM entities ORDER BY id")
+            .map_err(|error| error.to_string())?;
+        let entity_rows = statement
+            .query_map([], |row| {
+                let entity_type: String = row.get(1)?;
+                let name: String = row.get(2)?;
+                Ok((
+                    "entity".into(),
+                    row.get::<_, String>(0)?,
+                    format!("{entity_type} profile: {name}"),
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows.extend(entity_rows);
+    }
+
+    {
+        let mut statement = conn
+            .prepare(
+                r#"
+SELECT
+  f.id,
+  f.fact_type,
+  subject.name AS subject_name,
+  COALESCE(object.name, f.value_text) AS object_name,
+  COALESCE(event.title, '') AS event_title
+FROM facts f
+JOIN entities subject ON subject.id = f.subject_entity_id
+LEFT JOIN entities object ON object.id = f.object_entity_id
+LEFT JOIN events event ON event.id = f.source_event_id
+WHERE f.status = 'confirmed'
+ORDER BY f.id
+"#,
+            )
+            .map_err(|error| error.to_string())?;
+        let fact_rows = statement
+            .query_map([], |row| {
+                let fact_type: String = row.get(1)?;
+                let subject_name: String = row.get(2)?;
+                let object_name: String = row.get(3)?;
+                let event_title: String = row.get(4)?;
+                Ok((
+                    "fact".into(),
+                    row.get::<_, String>(0)?,
+                    format!("{subject_name} {fact_type} {object_name}. {event_title}"),
+                ))
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows.extend(fact_rows);
+    }
+
+    Ok(rows)
+}
+
+fn upsert_vector_entry(
+    conn: &Connection,
+    source_type: &str,
+    source_id: &str,
+    chunk_text: &str,
+) -> Result<(), String> {
+    let entry_id = format!("{source_type}-{source_id}");
+    let embedding = embedding_to_bytes(&keyword_embedding(chunk_text));
+    conn.execute(
+        r#"
+INSERT INTO vector_entries (
+  id, source_type, source_id, chunk_text, embedding_model, embedding, updated_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
+ON CONFLICT(source_type, source_id, embedding_model) DO UPDATE SET
+  chunk_text = excluded.chunk_text,
+  embedding = excluded.embedding,
+  updated_at = excluded.updated_at
+"#,
+        (
+            entry_id,
+            source_type,
+            source_id,
+            chunk_text,
+            LOCAL_VECTOR_MODEL,
+            embedding,
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn semantic_search(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<VectorSearchHit>, String> {
+    let query_embedding = keyword_embedding(query);
+    let mut statement = conn
+        .prepare(
+            r#"
+SELECT id, source_type, source_id, chunk_text, embedding
+FROM vector_entries
+WHERE embedding_model = ?1
+"#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([LOCAL_VECTOR_MODEL], |row| {
+            let bytes: Vec<u8> = row.get(4)?;
+            Ok(VectorSearchHit {
+                entry_id: row.get(0)?,
+                source_type: row.get(1)?,
+                source_id: row.get(2)?,
+                chunk_text: row.get(3)?,
+                similarity: cosine_similarity(&query_embedding, &embedding_from_bytes(&bytes)),
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    let mut hits = rows;
+    hits.sort_by(|left, right| {
+        right
+            .similarity
+            .total_cmp(&left.similarity)
+            .then_with(|| left.entry_id.cmp(&right.entry_id))
+    });
+    hits.truncate(limit);
+    Ok(hits)
+}
+
+fn keyword_embedding(text: &str) -> [f32; VECTOR_DIMENSIONS] {
+    let mut embedding = [0.0; VECTOR_DIMENSIONS];
+    for token in tokenize_ascii(text) {
+        let index = stable_token_hash(&token) % VECTOR_DIMENSIONS;
+        embedding[index] += 1.0;
+    }
+    embedding
+}
+
+fn tokenize_ascii(text: &str) -> Vec<String> {
+    text.split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn stable_token_hash(token: &str) -> usize {
+    token.bytes().fold(2166136261usize, |hash, byte| {
+        (hash ^ byte as usize).wrapping_mul(16777619usize)
+    })
+}
+
+fn cosine_similarity(left: &[f32; VECTOR_DIMENSIONS], right: &[f32]) -> f32 {
+    if right.len() != VECTOR_DIMENSIONS {
+        return 0.0;
+    }
+
+    let mut dot = 0.0;
+    let mut left_norm = 0.0;
+    let mut right_norm = 0.0;
+    for index in 0..VECTOR_DIMENSIONS {
+        dot += left[index] * right[index];
+        left_norm += left[index] * left[index];
+        right_norm += right[index] * right[index];
+    }
+
+    if left_norm == 0.0 || right_norm == 0.0 {
+        0.0
+    } else {
+        dot / (left_norm.sqrt() * right_norm.sqrt())
+    }
+}
+
+fn embedding_to_bytes(embedding: &[f32; VECTOR_DIMENSIONS]) -> Vec<u8> {
+    embedding
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+fn embedding_from_bytes(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
 }
 
 fn run_snapshot_restore_at(db_path: &Path) -> Result<SnapshotRestoreReport, String> {
@@ -1018,6 +1368,57 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(db_path.parent().unwrap().join("snapshots"));
     }
+
+    #[test]
+    fn vector_search_writes_updates_and_queries_index() {
+        let db_path = std::env::temp_dir().join(format!(
+            "super-novel-tauri-spike-vector-test-{}.db",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("test database should open");
+        let report = run_vector_search_at(&conn, db_path.display().to_string())
+            .expect("vector search spike should run");
+
+        assert_eq!(report.embedding_model, LOCAL_VECTOR_MODEL);
+        assert!(report.initial_index_rebuilt);
+        assert!(report.entries_written >= 15);
+        assert_eq!(report.query, "StarKey BlackTower");
+        assert_eq!(report.updated_source_id, "chapter-2");
+        assert_eq!(
+            report.updated_chunk_text,
+            "A sealed relic is hidden under the old well."
+        );
+        let before_chapter_hit = report
+            .before_update_hits
+            .iter()
+            .find(|hit| hit.source_id == "chapter-2")
+            .expect("chapter-2 should be searchable before update");
+        let after_chapter_hit = report
+            .after_update_hits
+            .iter()
+            .find(|hit| hit.source_id == "chapter-2")
+            .expect("chapter-2 should still be searchable after update");
+        assert!(before_chapter_hit.similarity > after_chapter_hit.similarity);
+        assert!(report
+            .after_update_hits
+            .iter()
+            .any(|hit| hit.source_id == "fact-lin-key"));
+        let persisted_chapter_text: String = conn
+            .query_row(
+                "SELECT content FROM chapters WHERE id = 'chapter-2'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("chapter content should be readable");
+        assert_eq!(
+            persisted_chapter_text,
+            "The StarKey appears near the BlackTower."
+        );
+
+        let _ = fs::remove_file(&db_path);
+    }
 }
 
 #[cfg(test)]
@@ -1037,7 +1438,8 @@ pub fn run() {
             run_state_graph_spike,
             run_project_database_spike,
             run_incremental_check_spike,
-            run_snapshot_restore_spike
+            run_snapshot_restore_spike,
+            run_vector_search_spike
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

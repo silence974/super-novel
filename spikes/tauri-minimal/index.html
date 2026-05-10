@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
@@ -12,86 +12,92 @@
     <main class="shell">
       <section class="hero">
         <p class="eyebrow">Windows desktop spike</p>
-        <h1>Super Novel 状态图谱验证台</h1>
+        <h1>Super Novel state graph spike</h1>
         <p class="summary">
-          Tauri 前端调用 Rust 后端，在内存或本地项目 SQLite 数据库中构建事件、
-          事实、检查结果，验证强约束状态机的最小闭环。
+          A compact Tauri panel for validating SQLite-backed state graph,
+          incremental checks, file snapshots, and derived vector index behavior.
         </p>
         <div class="actions">
-          <button id="run-memory-spike" type="button">运行内存验证</button>
-          <button id="run-project-spike" type="button">创建/打开本地项目库</button>
-          <button id="run-incremental-spike" type="button">运行增量检查预览</button>
-          <button id="run-snapshot-spike" type="button">运行快照恢复验证</button>
+          <button id="run-memory-spike" type="button">Run memory spike</button>
+          <button id="run-project-spike" type="button">Open project database</button>
+          <button id="run-incremental-spike" type="button">Run incremental preview</button>
+          <button id="run-snapshot-spike" type="button">Run snapshot restore</button>
+          <button id="run-vector-spike" type="button">Run vector search spike</button>
         </div>
       </section>
 
       <section class="grid">
         <article class="card">
           <span class="label">SQLite</span>
-          <strong id="sqlite-version">未运行</strong>
-          <small id="fts-status">FTS5 状态待检测</small>
+          <strong id="sqlite-version">Not run</strong>
+          <small id="fts-status">FTS5 pending</small>
         </article>
         <article class="card">
-          <span class="label">冲突</span>
+          <span class="label">Conflicts</span>
           <strong id="conflict-count">0</strong>
-          <small>error / warning / notice 的前置验证</small>
+          <small>error / warning / notice checks</small>
         </article>
         <article class="card">
-          <span class="label">候选事实</span>
+          <span class="label">Candidate Facts</span>
           <strong id="candidate-count">0</strong>
-          <small>候选数据不会进入 confirmed 检查链</small>
+          <small>candidate data stays out of confirmed checks</small>
         </article>
         <article class="card">
-          <span class="label">项目库</span>
-          <strong id="db-mode">未运行</strong>
-          <small id="seed-status">尚未创建或打开项目数据库</small>
+          <span class="label">Project DB</span>
+          <strong id="db-mode">Not run</strong>
+          <small id="seed-status">No project database opened yet</small>
         </article>
         <article class="card">
-          <span class="label">增量检查</span>
+          <span class="label">Incremental Check</span>
           <strong id="resolved-count">0</strong>
-          <small id="impact-summary">尚未运行影响范围计算</small>
+          <small id="impact-summary">No impact scope calculated yet</small>
         </article>
         <article class="card">
-          <span class="label">快照恢复</span>
-          <strong id="restore-status">未运行</strong>
-          <small id="snapshot-size">尚未创建快照</small>
+          <span class="label">Snapshot Restore</span>
+          <strong id="restore-status">Not run</strong>
+          <small id="snapshot-size">No snapshot created yet</small>
+        </article>
+        <article class="card">
+          <span class="label">Vector Index</span>
+          <strong id="vector-entry-count">0</strong>
+          <small id="vector-model">Not indexed</small>
         </article>
       </section>
 
       <section class="database-card">
         <span class="label">Database Path</span>
-        <code id="database-path">未运行</code>
+        <code id="database-path">Not run</code>
       </section>
 
       <section class="incremental-card">
         <div class="section-header">
           <div>
             <span class="label">Incremental Check Preview</span>
-            <h2>受影响范围与补丁预览</h2>
+            <h2>Impact scope and patch preview</h2>
           </div>
-          <code id="changed-fact">未运行</code>
+          <code id="changed-fact">Not run</code>
         </div>
-        <p id="patch-description">尚未生成增量检查预览。</p>
+        <p id="patch-description">No incremental check preview generated yet.</p>
         <div class="scope-grid">
           <div>
-            <span>实体</span>
-            <code id="affected-entities">无</code>
+            <span>Entities</span>
+            <code id="affected-entities">None</code>
           </div>
           <div>
-            <span>事件</span>
-            <code id="affected-events">无</code>
+            <span>Events</span>
+            <code id="affected-events">None</code>
           </div>
           <div>
-            <span>章节</span>
-            <code id="affected-chapters">无</code>
+            <span>Chapters</span>
+            <code id="affected-chapters">None</code>
           </div>
           <div>
-            <span>事实</span>
-            <code id="affected-facts">无</code>
+            <span>Facts</span>
+            <code id="affected-facts">None</code>
           </div>
           <div>
-            <span>规则</span>
-            <code id="affected-rules">无</code>
+            <span>Rules</span>
+            <code id="affected-rules">None</code>
           </div>
         </div>
       </section>
@@ -100,58 +106,86 @@
         <div class="section-header">
           <div>
             <span class="label">Snapshot Restore</span>
-            <h2>项目快照与回滚验证</h2>
+            <h2>Project snapshot and rollback</h2>
           </div>
-          <code id="snapshot-path">未运行</code>
+          <code id="snapshot-path">Not run</code>
         </div>
         <div class="scope-grid">
           <div>
-            <span>破坏前章节</span>
-            <code id="chapter-before-damage">无</code>
+            <span>Before damage</span>
+            <code id="chapter-before-damage">None</code>
           </div>
           <div>
-            <span>破坏后章节</span>
-            <code id="chapter-after-damage">无</code>
+            <span>After damage</span>
+            <code id="chapter-after-damage">None</code>
           </div>
           <div>
-            <span>恢复后章节</span>
-            <code id="chapter-after-restore">无</code>
+            <span>After restore</span>
+            <code id="chapter-after-restore">None</code>
           </div>
           <div>
-            <span>冲突数变化</span>
-            <code id="snapshot-conflicts">无</code>
+            <span>Conflict counts</span>
+            <code id="snapshot-conflicts">None</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="vector-card">
+        <div class="section-header">
+          <div>
+            <span class="label">Vector Search</span>
+            <h2>Derived semantic index write, update, query</h2>
+          </div>
+          <code id="vector-query">Not run</code>
+        </div>
+        <div class="scope-grid">
+          <div>
+            <span>Updated source</span>
+            <code id="vector-updated-source">None</code>
+          </div>
+          <div>
+            <span>Updated text</span>
+            <code id="vector-updated-text">None</code>
           </div>
         </div>
       </section>
 
       <section class="panels">
         <article>
-          <h2>位置链</h2>
+          <h2>Location Chain</h2>
           <ul id="location-chain"></ul>
         </article>
         <article>
-          <h2>道具持有链</h2>
+          <h2>Item Holder Chain</h2>
           <ul id="item-chain"></ul>
         </article>
         <article>
-          <h2>叙事顺序</h2>
+          <h2>Narrative Order</h2>
           <ul id="narrative-order"></ul>
         </article>
         <article class="conflicts">
-          <h2>冲突结果</h2>
+          <h2>Conflicts</h2>
           <ul id="conflicts"></ul>
         </article>
         <article>
-          <h2>增量修复前</h2>
+          <h2>Before Incremental Repair</h2>
           <ul id="before-scope-conflicts"></ul>
         </article>
         <article>
-          <h2>增量修复后</h2>
+          <h2>After Incremental Repair</h2>
           <ul id="after-scope-conflicts"></ul>
         </article>
         <article>
-          <h2>剩余全局冲突</h2>
+          <h2>Remaining Global Conflicts</h2>
           <ul id="remaining-global-conflicts"></ul>
+        </article>
+        <article>
+          <h2>Vector Hits Before Update</h2>
+          <ul id="vector-before-hits"></ul>
+        </article>
+        <article>
+          <h2>Vector Hits After Update</h2>
+          <ul id="vector-after-hits"></ul>
         </article>
       </section>
     </main>

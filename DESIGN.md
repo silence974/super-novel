@@ -81,6 +81,8 @@ draft -> candidate -> confirmed -> superseded/deprecated
 - `calendar_id`：架空历法配置。
 - `time_scale_rule`：时间流速映射规则。
 
+当前 spike 已验证单层整数比例时间域映射：异速时间域本地 tick 可以通过锚点和比例规则映射到 canonical `world_time`，同时保留独立的 `narrative_order`。
+
 ## 状态迁移
 
 状态迁移由确认事件触发。

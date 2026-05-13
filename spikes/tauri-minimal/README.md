@@ -1,5 +1,16 @@
 # Tauri Minimal Spike
 
+## 2026-05-13 time domain mapping addendum
+
+- Added Tauri command: `run_time_domain_spike`.
+- Added `time_domains`, `time_scale_rules`, and `time_domain_events` tables to the Tauri spike schema.
+- Seeded a primary `Prime World` domain and a faster `Mirror Realm` domain.
+- Verified a confirmed rule where `30` ticks in `Mirror Realm` map to `10` ticks in `Prime World`.
+- Verified `mirror-realm:45` maps to canonical `world_tick=1025`.
+- Verified narrative order remains separate from canonical world time through a later flashback event mapped to `world_tick=500`.
+- Verified a time scale rule change can identify affected domain events and canonical world tick range for incremental recheck planning.
+- Larger nested domains, non-integer mappings, UI editing, and time-domain-driven conflict recomputation remain open.
+
 ## 2026-05-10 vector search addendum
 
 - Added Tauri command: `run_vector_search_spike`.
@@ -43,9 +54,11 @@
 - 已接入 Tauri command：`run_project_database_spike`。
 - 已接入 Tauri command：`run_incremental_check_spike`。
 - 已接入 Tauri command：`run_snapshot_restore_spike`。
+- 已接入 Tauri command：`run_time_domain_spike`。
 - 已验证本地项目数据库首次 seed 和二次复用。
 - 已验证增量检查影响范围和预览式补丁回滚。
 - 已验证项目数据库文件快照和恢复。
+- 已验证时间域流速映射、倒叙叙事顺序分离和时间配置影响范围。
 - 已将默认 greet 页面替换为状态图谱验证面板。
 - `npm run tauri build` 的 MSI bundling 阶段失败，原因是下载 WiX 时连接被中止。
 - `npm run tauri build -- --bundles nsis --no-sign` 的 NSIS bundling 阶段失败，原因是下载 NSIS 时超时。
@@ -85,6 +98,13 @@ src-tauri/target/release/super-novel-tauri-spike.exe
 ```text
 src-tauri/target/release/super-novel-tauri-spike.exe
 约 10.07 MB
+```
+
+接入关系路径、向量检索、Provider Adapter 和时间域映射命令后的 release 可执行文件：
+
+```text
+src-tauri/target/release/super-novel-tauri-spike.exe
+约 10.27 MiB
 ```
 
 该体积仍只代表 spike，不包含正式编辑器、完整图谱、向量索引和真实 UI。
@@ -178,6 +198,25 @@ src-tauri/target/release/super-novel-tauri-spike.exe
 - 恢复后章节标题从 `DAMAGED CHAPTER` 回到 `Arrival`。
 - 恢复后冲突数量从破坏后的 `1` 回到快照时的 `2`。
 - 该方案目前只验证单数据库文件；多数据库组合时仍需额外一致性设计。
+
+### run_time_domain_spike
+
+用途：
+
+- 打开或创建 demo 项目数据库。
+- 创建主时间域 `Prime World` 和异速时间域 `Mirror Realm`。
+- 使用确认规则将 `Mirror Realm` 的本地 tick 映射到主时间域 canonical world tick。
+- 查询 `mirror-realm:45` 并返回 `world_tick=1025`。
+- 返回受该时间域规则影响的事件和 canonical world tick 范围。
+- 展示倒叙事件在叙事顺序靠后但 canonical world tick 更早。
+
+验证内容：
+
+- 时间域配置可作为 SQLite 本地 schema 表达。
+- `30` 个 `Mirror Realm` tick 可映射为 `10` 个 `Prime World` tick。
+- 时间域本地时间、canonical world time 和 narrative order 可以同时展示。
+- 修改时间域流速规则时，可以先定位受影响事件和时间区间。
+- 当前仍未验证嵌套时间域、不可逆时间跳转、非整数映射 UI 和基于时间配置变更的完整冲突重算。
 
 ## 运行命令
 

@@ -118,6 +118,42 @@ type RelationshipPathReport = {
   path_summary: string;
 };
 
+type TimeScaleRuleRow = {
+  rule_id: string;
+  source_domain_id: string;
+  target_domain_id: string;
+  source_anchor_tick: number;
+  target_anchor_tick: number;
+  source_tick_span: number;
+  target_tick_span: number;
+  summary: string;
+};
+
+type TimeDomainEventRow = {
+  event_id: string;
+  title: string;
+  time_domain_id: string;
+  time_domain_name: string;
+  local_tick: number;
+  canonical_world_tick: number;
+  narrative_order: number;
+  affects_current_timeline: boolean;
+};
+
+type TimeDomainReport = {
+  database_path: string;
+  primary_domain_id: string;
+  scale_rules: TimeScaleRuleRow[];
+  mapped_events: TimeDomainEventRow[];
+  query_domain_id: string;
+  query_domain_tick: number;
+  query_world_tick: number;
+  affected_event_ids: string[];
+  affected_world_tick_start: number;
+  affected_world_tick_end: number;
+  narrative_order_separate: boolean;
+};
+
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.querySelector<T>(`#${id}`);
   if (!element) {
@@ -415,6 +451,58 @@ async function runRelationshipPathSpike() {
   }
 }
 
+function renderTimeDomainEvents(targetId: string, rows: TimeDomainEventRow[]) {
+  const list = byId<HTMLUListElement>(targetId);
+  list.innerHTML = "";
+  for (const row of rows) {
+    const item = document.createElement("li");
+    item.innerHTML = `
+      <strong>#${row.narrative_order} ${row.title}</strong>
+      <span>${row.time_domain_name}:${row.local_tick} -> world_tick=${row.canonical_world_tick}</span>
+      <code>${row.affects_current_timeline ? "timeline" : "non-timeline"}</code>
+    `;
+    list.appendChild(item);
+  }
+}
+
+function renderTimeDomainReport(report: TimeDomainReport) {
+  byId("time-domain-event-count").textContent = String(
+    report.mapped_events.length,
+  );
+  byId("time-domain-status").textContent = report.narrative_order_separate
+    ? "narrative order separated"
+    : "narrative order aligned";
+  byId("time-domain-primary").textContent = report.primary_domain_id;
+  byId("time-domain-query").textContent =
+    `${report.query_domain_id}:${report.query_domain_tick} -> ${report.query_world_tick}`;
+  byId("time-domain-range").textContent =
+    `${report.affected_world_tick_start} -> ${report.affected_world_tick_end}`;
+  byId("time-domain-affected-events").textContent =
+    report.affected_event_ids.join(", ");
+  byId("time-domain-rules").textContent = report.scale_rules
+    .map((rule) => rule.summary)
+    .join(" | ");
+  byId("database-path").textContent = report.database_path;
+  renderTimeDomainEvents("time-domain-events", report.mapped_events);
+}
+
+async function runTimeDomainSpike() {
+  const button = byId<HTMLButtonElement>("run-time-domain-spike");
+  const originalText = button.textContent ?? "Run time domain spike";
+  button.disabled = true;
+  button.textContent = "Mapping...";
+  try {
+    const report = await invoke<TimeDomainReport>("run_time_domain_spike");
+    renderTimeDomainReport(report);
+  } catch (error) {
+    byId("time-domain-status").textContent = "error";
+    byId("time-domain-rules").textContent = String(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   byId<HTMLButtonElement>("run-memory-spike").addEventListener("click", () =>
     runSpike("run_state_graph_spike", "run-memory-spike"),
@@ -441,5 +529,9 @@ window.addEventListener("DOMContentLoaded", () => {
   byId<HTMLButtonElement>("run-relationship-spike").addEventListener(
     "click",
     runRelationshipPathSpike,
+  );
+  byId<HTMLButtonElement>("run-time-domain-spike").addEventListener(
+    "click",
+    runTimeDomainSpike,
   );
 });

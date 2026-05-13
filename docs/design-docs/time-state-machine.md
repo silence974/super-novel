@@ -72,6 +72,20 @@
 - 是否允许嵌套时间域。
 - 是否允许不可逆时间跳转。
 
+## 当前 Spike 结论
+
+`spikes/tauri-minimal` 已验证一个最小时间域映射流程：
+
+1. 主时间域 `Prime World` 作为 canonical world tick 坐标。
+2. 异速时间域 `Mirror Realm` 通过锚点和比例规则映射到主时间域。
+3. `30` 个 `Mirror Realm` tick 映射为 `10` 个 `Prime World` tick。
+4. `mirror-realm:45` 可映射为 canonical `world_tick=1025`。
+5. 事件展示可同时返回本地 domain tick、canonical world tick 和 narrative order。
+6. 倒叙事件可保持叙事顺序靠后但 canonical world tick 更早。
+7. 时间域规则变更可先定位受影响事件和 canonical world tick 范围，供增量检查使用。
+
+该流程只验证单层、整数比例映射；嵌套时间域、不可逆跳转、非整数映射 UI 和完整冲突重算仍未完成。
+
 ## 倒叙处理
 
 倒叙事件必须同时记录：

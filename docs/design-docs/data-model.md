@@ -107,6 +107,31 @@
 - `source_refs`
 - `confirmation_status`
 
+### Time Domain
+
+字段建议：
+
+- `id`
+- `name`
+- `is_primary`
+- `allows_nested`
+- `allows_irreversible_jump`
+
+### Time Scale Rule
+
+字段建议：
+
+- `id`
+- `source_domain_id`
+- `target_domain_id`
+- `source_anchor_tick`
+- `target_anchor_tick`
+- `source_tick_span`
+- `target_tick_span`
+- `status`
+
+当前 spike 中，异速时间域事件用独立的 `time_domain_events` 表表达本地 domain tick、canonical world tick 映射输入和 narrative order。正式模型仍以 `Event` 为领域入口。
+
 ### Fact
 
 字段建议：

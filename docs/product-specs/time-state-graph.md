@@ -58,3 +58,9 @@
 - 可以查询关系变化路径。
 - 可以区分世界内时间和叙事顺序。
 - 可以配置至少一个非主时间域和时间流速规则。
+
+## 当前 Spike 记录
+
+- `spikes/tauri-minimal` 已验证一个非主时间域 `Mirror Realm` 和主时间域 `Prime World` 的流速映射样例。
+- 已验证 `mirror-realm:45` 可映射为 canonical `world_tick=1025`。
+- 已验证倒叙事件可保持叙事顺序靠后但世界内时间更早。

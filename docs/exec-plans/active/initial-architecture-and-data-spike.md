@@ -41,7 +41,7 @@ active
 3. `[in-progress]` 对比嵌入式图数据库与 SQLite 自建图模型。
 4. `[partial]` 验证角色位置链、道具持有链和关系路径查询。
 5. `[partial]` 验证向量索引写入、更新和语义查询。
-6. `[partial]` 设计并验证时间域和时间流速映射样例。
+6. `[done]` 设计并验证时间域和时间流速映射样例。
 7. `[partial]` 实现 OpenAI Provider Adapter 最小接口草案。
 8. `[partial]` 验证项目快照和恢复策略。
 9. `[done]` 更新 `docs/design-docs/technology-decisions.md`。
@@ -308,6 +308,37 @@ active
 - SQLite 自建节点/边模型可以支持一个最小多跳关系路径查询样例。
 - 该验证支持继续保留 SQLite graph fallback 方向。
 - 尚未验证更大图谱下的路径排序、性能、环路策略、关系过滤 DSL 和专用图数据库打包。
+
+### 2026-05-13 时间域与流速映射原型
+
+变更范围：
+
+- `spikes/tauri-minimal/src-tauri/src/lib.rs`
+- `spikes/tauri-minimal/src/main.ts`
+- `spikes/tauri-minimal/src/styles.css`
+- `spikes/tauri-minimal/index.html`
+- `spikes/tauri-minimal/README.md`
+
+运行结果：
+
+- 新增 Tauri command：`run_time_domain_spike`。
+- Tauri SQLite schema 新增 `time_domains`、`time_scale_rules` 和 `time_domain_events`。
+- demo seed 新增主时间域 `Prime World` 和异速时间域 `Mirror Realm`。
+- 已验证 `30` 个 `Mirror Realm` tick 映射为 `10` 个 `Prime World` tick。
+- 已验证 `mirror-realm:45` 映射为 canonical `world_tick=1025`。
+- 已验证倒叙事件在叙事顺序靠后但 canonical world tick 更早：`time-event-flashback` 的 `narrative_order=5`、`world_tick=500`。
+- 已返回时间域规则变更的受影响事件和 canonical world tick 范围：`1010 -> 1030`。
+- 前端新增“Run time domain spike”按钮和时间域映射展示面板。
+- `cargo test` 成功，8 个测试通过。
+- `cargo fmt --check` 成功。
+- `npm.cmd run build` 成功。
+- `npm.cmd run tauri build -- --no-bundle` 成功，接入时间域映射命令后 release exe 体积约 10.27 MiB。
+
+当前结论：
+
+- 时间域、流速映射和叙事顺序分离可以先用 SQLite 本地 schema 与 Rust 服务层算法验证。
+- 时间域配置变更可以先计算“受影响时间域事件 + canonical world tick 范围”，再接入增量检查。
+- 当前只验证单层、整数比例映射；嵌套时间域、不可逆跳转、非整数映射 UI 和基于时间配置变更的完整冲突重算仍未验证。
 
 ### 2026-05-08 SQLite 状态图谱原型
 

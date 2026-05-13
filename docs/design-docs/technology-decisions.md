@@ -186,6 +186,33 @@
 - 当前未发起真实 OpenAI API 请求，未引入 OpenAI SDK，也未验证 streaming、错误映射、重试、模型配置、token 统计或真实响应解析。
 - 正式实现应以 OpenAI Responses API 承载文本生成类任务，以 Embeddings API 承载 embedding 生成，并继续保持业务层不直接依赖具体 SDK。
 
+## TD-006 时间域映射
+
+状态：`spiking`
+
+建议：
+
+- 主时间域使用 canonical world tick 作为状态机统一推导坐标。
+- 异速时间域使用锚点和比例规则映射到主时间域。
+- 事件展示同时保留本地 domain tick、canonical world tick 和 narrative order。
+
+本地验证记录：
+
+- 2026-05-13：`spikes/tauri-minimal` 新增 Tauri command `run_time_domain_spike`。
+- 2026-05-13：Tauri SQLite schema 新增 `time_domains`、`time_scale_rules` 和 `time_domain_events`。
+- 2026-05-13：已验证 `Mirror Realm` 到 `Prime World` 的锚点比例映射：`30` 个异域 tick 映射为 `10` 个主时间域 tick。
+- 2026-05-13：已验证 `mirror-realm:45` 映射为 canonical `world_tick=1025`。
+- 2026-05-13：已验证叙事顺序与 canonical world time 分离，倒叙事件可以在叙事顺序靠后但世界内时间更早。
+- 2026-05-13：已验证时间域规则变更可以返回受影响事件和 canonical world tick 范围，供后续增量检查使用。
+- 2026-05-13：`cargo test` 通过，8 个测试全过；`npm.cmd run tauri build -- --no-bundle` 通过，release exe 约 10.27 MiB。
+
+当前结论：
+
+- 单层、整数比例的时间域映射可以在 Rust 服务层上实现，并由 SQLite 表持久化配置和样例事件。
+- 状态机主坐标应继续使用 canonical world tick，避免不同时间域直接参与强约束比较。
+- 修改时间域规则时，增量检查应先定位该域内事件，再基于映射后的 canonical world tick 范围重新计算相关状态。
+- 尚未验证嵌套时间域、不可逆时间跳转、非整数映射、跨域事件排序 UI 和完整冲突重算。
+
 ## 参考资料
 
 - `docs/references/openai-api-llms.txt`

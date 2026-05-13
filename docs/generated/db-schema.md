@@ -28,6 +28,7 @@
 - 当前 Tauri command：`run_vector_search_spike`。
 - 当前 Tauri command：`run_openai_provider_adapter_spike`。
 - 当前 Tauri command：`run_relationship_path_spike`。
+- 当前 Tauri command：`run_time_domain_spike`。
 - 当前 demo 本地数据库路径：`%LOCALAPPDATA%\super-novel-tauri-spike\projects\demo-work\project.db`。
 - 当前 demo 快照路径：`%LOCALAPPDATA%\super-novel-tauri-spike\projects\demo-work\snapshots\demo-snapshot.project.db`。
 - 已验证本地 SQLite 文件首次 seed 和二次复用。
@@ -35,6 +36,7 @@
 - 已验证 SQLite 数据库文件复制可用于最低成本快照恢复。
 - 已验证最小向量索引写入、savepoint 内单条 source 更新预览和余弦相似度查询。
 - 已验证 Tauri SQLite schema 中的 `graph_edges` 可支持最小 recursive CTE 多跳关系路径查询。
+- 已验证 Tauri SQLite schema 中的 `time_domains`、`time_scale_rules` 和 `time_domain_events` 可支持单层时间域流速映射样例。
 
 ## 关系数据库草案
 
@@ -80,6 +82,36 @@
 - `confirmation_status`
 - `created_at`
 - `updated_at`
+
+### time_domains
+
+- `id`
+- `name`
+- `is_primary`
+- `allows_nested`
+- `allows_irreversible_jump`
+
+### time_scale_rules
+
+- `id`
+- `source_domain_id`
+- `target_domain_id`
+- `source_anchor_tick`
+- `target_anchor_tick`
+- `source_tick_span`
+- `target_tick_span`
+- `status`
+
+### time_domain_events
+
+- `id`
+- `title`
+- `time_domain_id`
+- `local_tick`
+- `narrative_order`
+- `source_event_id`
+- `affects_current_timeline`
+- `confirmation_status`
 
 ### check_results
 

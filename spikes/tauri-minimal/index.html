@@ -25,6 +25,7 @@
           <button id="run-vector-spike" type="button">Run vector search spike</button>
           <button id="run-provider-spike" type="button">Run provider adapter spike</button>
           <button id="run-relationship-spike" type="button">Run relationship path spike</button>
+          <button id="run-time-domain-spike" type="button">Run time domain spike</button>
         </div>
       </section>
 
@@ -73,6 +74,11 @@
           <span class="label">Relation Path</span>
           <strong id="relationship-hop-count">0</strong>
           <small id="relationship-status">Not searched</small>
+        </article>
+        <article class="card">
+          <span class="label">Time Domains</span>
+          <strong id="time-domain-event-count">0</strong>
+          <small id="time-domain-status">Not mapped</small>
         </article>
       </section>
 
@@ -221,6 +227,31 @@
         </div>
       </section>
 
+      <section class="time-domain-card">
+        <div class="section-header">
+          <div>
+            <span class="label">Time Domain Mapping</span>
+            <h2>Local domain ticks mapped to canonical world time</h2>
+          </div>
+          <code id="time-domain-query">Not run</code>
+        </div>
+        <p id="time-domain-rules">No time scale rules mapped yet.</p>
+        <div class="scope-grid">
+          <div>
+            <span>Primary domain</span>
+            <code id="time-domain-primary">None</code>
+          </div>
+          <div>
+            <span>Affected world ticks</span>
+            <code id="time-domain-range">None</code>
+          </div>
+          <div>
+            <span>Affected events</span>
+            <code id="time-domain-affected-events">None</code>
+          </div>
+        </div>
+      </section>
+
       <section class="panels">
         <article>
           <h2>Location Chain</h2>
@@ -257,6 +288,10 @@
         <article>
           <h2>Vector Hits After Update</h2>
           <ul id="vector-after-hits"></ul>
+        </article>
+        <article>
+          <h2>Time Domain Events</h2>
+          <ul id="time-domain-events"></ul>
         </article>
       </section>
     </main>

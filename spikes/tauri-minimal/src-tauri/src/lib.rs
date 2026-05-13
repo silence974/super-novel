@@ -134,6 +134,45 @@ struct RelationshipPathReport {
     path_summary: String,
 }
 
+#[derive(Serialize)]
+struct TimeScaleRuleRow {
+    rule_id: String,
+    source_domain_id: String,
+    target_domain_id: String,
+    source_anchor_tick: i64,
+    target_anchor_tick: i64,
+    source_tick_span: i64,
+    target_tick_span: i64,
+    summary: String,
+}
+
+#[derive(Serialize)]
+struct TimeDomainEventRow {
+    event_id: String,
+    title: String,
+    time_domain_id: String,
+    time_domain_name: String,
+    local_tick: i64,
+    canonical_world_tick: i64,
+    narrative_order: i64,
+    affects_current_timeline: bool,
+}
+
+#[derive(Serialize)]
+struct TimeDomainReport {
+    database_path: String,
+    primary_domain_id: String,
+    scale_rules: Vec<TimeScaleRuleRow>,
+    mapped_events: Vec<TimeDomainEventRow>,
+    query_domain_id: String,
+    query_domain_tick: i64,
+    query_world_tick: i64,
+    affected_event_ids: Vec<String>,
+    affected_world_tick_start: i64,
+    affected_world_tick_end: i64,
+    narrative_order_separate: bool,
+}
+
 #[derive(Clone)]
 struct FactScopeRow {
     id: String,
@@ -224,6 +263,42 @@ CREATE TABLE IF NOT EXISTS vector_entries (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_entries_source
 ON vector_entries(source_type, source_id, embedding_model);
+
+CREATE TABLE IF NOT EXISTS time_domains (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_primary INTEGER NOT NULL CHECK (is_primary IN (0, 1)),
+  allows_nested INTEGER NOT NULL CHECK (allows_nested IN (0, 1)),
+  allows_irreversible_jump INTEGER NOT NULL CHECK (allows_irreversible_jump IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS time_scale_rules (
+  id TEXT PRIMARY KEY,
+  source_domain_id TEXT NOT NULL REFERENCES time_domains(id),
+  target_domain_id TEXT NOT NULL REFERENCES time_domains(id),
+  source_anchor_tick INTEGER NOT NULL,
+  target_anchor_tick INTEGER NOT NULL,
+  source_tick_span INTEGER NOT NULL CHECK (source_tick_span > 0),
+  target_tick_span INTEGER NOT NULL CHECK (target_tick_span > 0),
+  status TEXT NOT NULL CHECK (status IN ('candidate', 'confirmed', 'deprecated'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_time_scale_rules_lookup
+ON time_scale_rules(source_domain_id, target_domain_id, status);
+
+CREATE TABLE IF NOT EXISTS time_domain_events (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  time_domain_id TEXT NOT NULL REFERENCES time_domains(id),
+  local_tick INTEGER NOT NULL,
+  narrative_order INTEGER NOT NULL,
+  source_event_id TEXT REFERENCES events(id),
+  affects_current_timeline INTEGER NOT NULL CHECK (affects_current_timeline IN (0, 1)),
+  confirmation_status TEXT NOT NULL CHECK (confirmation_status IN ('candidate', 'confirmed'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_time_domain_events_lookup
+ON time_domain_events(time_domain_id, local_tick, confirmation_status);
 "#;
 
 const LOCAL_VECTOR_MODEL: &str = "local-keyword-hash-v1";
@@ -288,6 +363,17 @@ fn run_relationship_path_spike() -> Result<RelationshipPathReport, String> {
 
     let conn = Connection::open(&db_path).map_err(|error| error.to_string())?;
     run_relationship_path_at(&conn, db_path.display().to_string())
+}
+
+#[tauri::command]
+fn run_time_domain_spike() -> Result<TimeDomainReport, String> {
+    let db_path = default_project_db_path()?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    let conn = Connection::open(&db_path).map_err(|error| error.to_string())?;
+    run_time_domain_at(&conn, db_path.display().to_string())
 }
 
 fn run_state_graph_report(
@@ -530,6 +616,243 @@ fn split_path(value: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+fn run_time_domain_at(
+    conn: &Connection,
+    database_path: String,
+) -> Result<TimeDomainReport, String> {
+    conn.execute_batch(SCHEMA)
+        .map_err(|error| error.to_string())?;
+    let _ = create_fts_table(conn)?;
+    let _ = ensure_seeded(conn)?;
+
+    let primary_domain_id = primary_time_domain_id(conn)?;
+    let scale_rules = time_scale_rules(conn)?;
+    let mapped_events = mapped_time_domain_events(conn, &primary_domain_id)?;
+    let query_domain_id = "mirror-realm".to_string();
+    let query_domain_tick = 45;
+    let query_world_tick = map_tick_to_primary(
+        conn,
+        &query_domain_id,
+        query_domain_tick,
+        &primary_domain_id,
+    )?;
+    let affected_events: Vec<&TimeDomainEventRow> = mapped_events
+        .iter()
+        .filter(|event| event.time_domain_id == query_domain_id)
+        .collect();
+    let affected_event_ids = affected_events
+        .iter()
+        .map(|event| event.event_id.clone())
+        .collect::<Vec<_>>();
+    let affected_world_tick_start = affected_events
+        .iter()
+        .map(|event| event.canonical_world_tick)
+        .min()
+        .unwrap_or(query_world_tick);
+    let affected_world_tick_end = affected_events
+        .iter()
+        .map(|event| event.canonical_world_tick)
+        .max()
+        .unwrap_or(query_world_tick);
+    let narrative_order_separate = mapped_events
+        .windows(2)
+        .any(|events| events[1].canonical_world_tick < events[0].canonical_world_tick);
+
+    Ok(TimeDomainReport {
+        database_path,
+        primary_domain_id,
+        scale_rules,
+        mapped_events,
+        query_domain_id,
+        query_domain_tick,
+        query_world_tick,
+        affected_event_ids,
+        affected_world_tick_start,
+        affected_world_tick_end,
+        narrative_order_separate,
+    })
+}
+
+fn primary_time_domain_id(conn: &Connection) -> Result<String, String> {
+    conn.query_row(
+        "SELECT id FROM time_domains WHERE is_primary = 1 LIMIT 1",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn time_scale_rules(conn: &Connection) -> Result<Vec<TimeScaleRuleRow>, String> {
+    let mut statement = conn
+        .prepare(
+            r#"
+SELECT
+  rule.id,
+  rule.source_domain_id,
+  source.name,
+  rule.target_domain_id,
+  target.name,
+  rule.source_anchor_tick,
+  rule.target_anchor_tick,
+  rule.source_tick_span,
+  rule.target_tick_span
+FROM time_scale_rules rule
+JOIN time_domains source ON source.id = rule.source_domain_id
+JOIN time_domains target ON target.id = rule.target_domain_id
+WHERE rule.status = 'confirmed'
+ORDER BY rule.id
+"#,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let rule_id: String = row.get(0)?;
+            let source_domain_id: String = row.get(1)?;
+            let source_name: String = row.get(2)?;
+            let target_domain_id: String = row.get(3)?;
+            let target_name: String = row.get(4)?;
+            let source_anchor_tick: i64 = row.get(5)?;
+            let target_anchor_tick: i64 = row.get(6)?;
+            let source_tick_span: i64 = row.get(7)?;
+            let target_tick_span: i64 = row.get(8)?;
+
+            Ok(TimeScaleRuleRow {
+                rule_id,
+                source_domain_id,
+                target_domain_id,
+                source_anchor_tick,
+                target_anchor_tick,
+                source_tick_span,
+                target_tick_span,
+                summary: format!(
+                    "{source_tick_span} ticks in {source_name} map to {target_tick_span} ticks in {target_name}"
+                ),
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(rows)
+}
+
+fn mapped_time_domain_events(
+    conn: &Connection,
+    primary_domain_id: &str,
+) -> Result<Vec<TimeDomainEventRow>, String> {
+    let mut statement = conn
+        .prepare(
+            r#"
+SELECT
+  event.id,
+  event.title,
+  event.time_domain_id,
+  domain.name,
+  event.local_tick,
+  event.narrative_order,
+  event.affects_current_timeline
+FROM time_domain_events event
+JOIN time_domains domain ON domain.id = event.time_domain_id
+WHERE event.confirmation_status = 'confirmed'
+ORDER BY event.narrative_order
+"#,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    rows.into_iter()
+        .map(
+            |(
+                event_id,
+                title,
+                time_domain_id,
+                time_domain_name,
+                local_tick,
+                narrative_order,
+                affects_current_timeline,
+            )| {
+                Ok(TimeDomainEventRow {
+                    event_id,
+                    title,
+                    canonical_world_tick: map_tick_to_primary(
+                        conn,
+                        &time_domain_id,
+                        local_tick,
+                        primary_domain_id,
+                    )?,
+                    time_domain_id,
+                    time_domain_name,
+                    local_tick,
+                    narrative_order,
+                    affects_current_timeline: affects_current_timeline == 1,
+                })
+            },
+        )
+        .collect()
+}
+
+fn map_tick_to_primary(
+    conn: &Connection,
+    source_domain_id: &str,
+    source_tick: i64,
+    primary_domain_id: &str,
+) -> Result<i64, String> {
+    if source_domain_id == primary_domain_id {
+        return Ok(source_tick);
+    }
+
+    let rule = conn
+        .query_row(
+            r#"
+SELECT source_anchor_tick, target_anchor_tick, source_tick_span, target_tick_span
+FROM time_scale_rules
+WHERE source_domain_id = ?1
+  AND target_domain_id = ?2
+  AND status = 'confirmed'
+LIMIT 1
+"#,
+            (source_domain_id, primary_domain_id),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            format!("missing time scale rule from {source_domain_id} to {primary_domain_id}")
+        })?;
+
+    let (source_anchor_tick, target_anchor_tick, source_tick_span, target_tick_span) = rule;
+    let scaled_delta = (source_tick - source_anchor_tick) * target_tick_span;
+    if scaled_delta % source_tick_span != 0 {
+        return Err(format!(
+            "non-integer time mapping for {source_domain_id}:{source_tick}"
+        ));
+    }
+
+    Ok(target_anchor_tick + scaled_delta / source_tick_span)
 }
 
 struct ProviderRequestDraft {
@@ -1233,6 +1556,28 @@ INSERT OR IGNORE INTO graph_edges (
   ('edge-guard-owns-key', 'OWNS', 'org-star-guard', 'item-key', 960, NULL, 'event-tower', 'confirmed'),
   ('edge-lin-located-town', 'LOCATED_AT', 'char-lin', 'loc-town', 1000, 1030, 'event-town', 'confirmed'),
   ('edge-lin-located-tower', 'LOCATED_AT', 'char-lin', 'loc-tower', 1010, 1040, 'event-tower', 'confirmed');
+
+INSERT OR IGNORE INTO time_domains (
+  id, name, is_primary, allows_nested, allows_irreversible_jump
+) VALUES
+  ('prime-world', 'Prime World', 1, 1, 0),
+  ('mirror-realm', 'Mirror Realm', 0, 0, 0);
+
+INSERT OR IGNORE INTO time_scale_rules (
+  id, source_domain_id, target_domain_id, source_anchor_tick, target_anchor_tick,
+  source_tick_span, target_tick_span, status
+) VALUES
+  ('rule-mirror-prime', 'mirror-realm', 'prime-world', 0, 1010, 30, 10, 'confirmed');
+
+INSERT OR IGNORE INTO time_domain_events (
+  id, title, time_domain_id, local_tick, narrative_order, source_event_id,
+  affects_current_timeline, confirmation_status
+) VALUES
+  ('time-event-town', 'LinChe reaches QingshiTown', 'prime-world', 1000, 1, 'event-town', 1, 'confirmed'),
+  ('time-event-realm-entry', 'LinChe enters Mirror Realm', 'mirror-realm', 0, 2, 'event-tower', 1, 'confirmed'),
+  ('time-event-realm-duel', 'Mirror Realm duel resolves', 'mirror-realm', 45, 3, 'event-tower', 1, 'confirmed'),
+  ('time-event-realm-exit', 'LinChe exits Mirror Realm', 'mirror-realm', 60, 4, 'event-tower', 1, 'confirmed'),
+  ('time-event-flashback', 'Earlier promise revealed later', 'prime-world', 500, 5, 'event-flashback', 1, 'confirmed');
 "#,
     )
     .map_err(|error| error.to_string())?;
@@ -1736,6 +2081,44 @@ mod tests {
 
         let _ = fs::remove_file(&db_path);
     }
+
+    #[test]
+    fn time_domain_maps_local_ticks_to_primary_world_time() {
+        let db_path = std::env::temp_dir().join(format!(
+            "super-novel-tauri-spike-time-domain-test-{}.db",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("test database should open");
+        let report =
+            run_time_domain_at(&conn, db_path.display().to_string()).expect("time domain report");
+
+        assert_eq!(report.primary_domain_id, "prime-world");
+        assert_eq!(report.query_domain_id, "mirror-realm");
+        assert_eq!(report.query_domain_tick, 45);
+        assert_eq!(report.query_world_tick, 1025);
+        assert_eq!(report.affected_world_tick_start, 1010);
+        assert_eq!(report.affected_world_tick_end, 1030);
+        assert!(report.narrative_order_separate);
+        assert!(report
+            .affected_event_ids
+            .contains(&"time-event-realm-duel".to_string()));
+        assert!(report
+            .scale_rules
+            .iter()
+            .any(|rule| rule.rule_id == "rule-mirror-prime"));
+
+        let flashback = report
+            .mapped_events
+            .iter()
+            .find(|event| event.event_id == "time-event-flashback")
+            .expect("flashback event should be mapped");
+        assert_eq!(flashback.canonical_world_tick, 500);
+        assert_eq!(flashback.narrative_order, 5);
+
+        let _ = fs::remove_file(&db_path);
+    }
 }
 
 #[cfg(test)]
@@ -1758,7 +2141,8 @@ pub fn run() {
             run_snapshot_restore_spike,
             run_vector_search_spike,
             run_openai_provider_adapter_spike,
-            run_relationship_path_spike
+            run_relationship_path_spike,
+            run_time_domain_spike
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

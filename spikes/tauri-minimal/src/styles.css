@@ -104,7 +104,8 @@ button:disabled {
 .snapshot-card,
 .vector-card,
 .provider-card,
-.relationship-card {
+.relationship-card,
+.time-domain-card {
   border: 1px solid rgba(23, 33, 47, 0.11);
   border-radius: 22px;
   padding: 20px;
@@ -117,7 +118,8 @@ button:disabled {
 .snapshot-card,
 .vector-card,
 .provider-card,
-.relationship-card {
+.relationship-card,
+.time-domain-card {
   margin-top: 18px;
 }
 

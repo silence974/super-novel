@@ -65,17 +65,34 @@ impl ProjectSession {
     }
 
     pub fn close(&self) -> Result<()> {
-        let backend = {
-            let mut state = self.write()?;
-            match std::mem::take(&mut *state) {
-                SessionState::Empty => return Err(BackendError::NotInitialized),
-                SessionState::Opening => {
-                    *state = SessionState::Opening;
-                    return Err(BackendError::ProjectLocked);
-                }
-                SessionState::Active(backend) => backend,
+        self.close_locked(self.write()?)
+    }
+
+    #[cfg(test)]
+    fn close_observing_wait(&self, on_waiting: impl FnOnce()) -> Result<()> {
+        let state = match self.state.try_write() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                on_waiting();
+                self.write()?
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(BackendError::LockPoisoned);
             }
         };
+        self.close_locked(state)
+    }
+
+    fn close_locked(&self, mut state: RwLockWriteGuard<'_, SessionState>) -> Result<()> {
+        let backend = match std::mem::take(&mut *state) {
+            SessionState::Empty => return Err(BackendError::NotInitialized),
+            SessionState::Opening => {
+                *state = SessionState::Opening;
+                return Err(BackendError::ProjectLocked);
+            }
+            SessionState::Active(backend) => backend,
+        };
+        drop(state);
         drop(backend);
         Ok(())
     }
@@ -151,7 +168,6 @@ mod tests {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::mpsc,
-        time::Duration,
     };
 
     use tempfile::tempdir;
@@ -160,6 +176,12 @@ mod tests {
 
     #[test]
     fn close_waits_for_an_in_flight_operation_before_opening_another_project() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum LifecycleEvent {
+            WaitingForOperations,
+            Opened(String),
+        }
+
         let root = tempdir().unwrap();
         let first = root.path().join("first");
         let second = root.path().join("second");
@@ -187,25 +209,30 @@ mod tests {
 
         operation_entered_rx.recv().unwrap();
         let lifecycle_session = session.clone();
-        let (lifecycle_started_tx, lifecycle_started_rx) = mpsc::channel();
-        let (lifecycle_finished_tx, lifecycle_finished_rx) = mpsc::channel();
+        let (lifecycle_event_tx, lifecycle_event_rx) = mpsc::channel();
         let lifecycle = std::thread::spawn(move || -> Result<()> {
-            lifecycle_started_tx.send(()).unwrap();
-            lifecycle_session.close()?;
+            lifecycle_session.close_observing_wait(|| {
+                lifecycle_event_tx
+                    .send(LifecycleEvent::WaitingForOperations)
+                    .unwrap();
+            })?;
             let workspace = lifecycle_session.open(&second)?;
-            lifecycle_finished_tx.send(workspace.project.name).unwrap();
+            lifecycle_event_tx
+                .send(LifecycleEvent::Opened(workspace.project.name))
+                .unwrap();
             Ok(())
         });
 
-        lifecycle_started_rx.recv().unwrap();
-        assert!(matches!(
-            lifecycle_finished_rx.recv_timeout(Duration::from_millis(100)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
-
+        assert_eq!(
+            lifecycle_event_rx.recv().unwrap(),
+            LifecycleEvent::WaitingForOperations
+        );
         release_operation_tx.send(()).unwrap();
         operation_finished_rx.recv().unwrap();
-        assert_eq!(lifecycle_finished_rx.recv().unwrap(), "乙");
+        assert_eq!(
+            lifecycle_event_rx.recv().unwrap(),
+            LifecycleEvent::Opened("乙".into())
+        );
         worker.join().unwrap().unwrap();
         lifecycle.join().unwrap().unwrap();
     }

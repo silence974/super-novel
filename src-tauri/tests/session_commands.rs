@@ -1,4 +1,6 @@
-use novel_backend::BackendError;
+use novel_backend::{
+    BackendError, CheckpointSource, CreateChapter, CreateCheckpoint, CreateVolume, SaveWorkingDraft,
+};
 use super_novel_desktop_lib::{CommandError, ProjectSession};
 use tempfile::tempdir;
 
@@ -36,4 +38,65 @@ fn unopened_projects_use_the_stable_not_found_error_contract() {
     assert_eq!(error.message, "No project is currently open.");
     assert_eq!(error.details, serde_json::json!({}));
     assert!(!error.message.contains("SQLite"));
+}
+
+#[test]
+fn desktop_session_runs_the_complete_writing_flow() {
+    let root = tempdir().unwrap();
+    let directory = root.path().join("novel");
+    std::fs::create_dir(&directory).unwrap();
+    let session = ProjectSession::default();
+
+    let workspace = session.create(&directory, "长夜书").unwrap();
+    let volume = session
+        .create_volume(CreateVolume {
+            title: "第一卷".into(),
+        })
+        .unwrap();
+    let chapter = session
+        .create_chapter(CreateChapter {
+            volume_id: Some(volume.id),
+            title: "雨夜".into(),
+        })
+        .unwrap();
+    let saved = session
+        .save_working_draft(SaveWorkingDraft {
+            chapter_id: chapter.id.clone(),
+            expected_edit_revision: 0,
+            content: "雨落在长街上。".into(),
+        })
+        .unwrap();
+    let checkpoint = session
+        .create_checkpoint(CreateCheckpoint {
+            chapter_id: chapter.id.clone(),
+            expected_edit_revision: saved.edit_revision,
+            source: CheckpointSource::Manual,
+        })
+        .unwrap();
+
+    assert_eq!(workspace.project.name, "长夜书");
+    assert_eq!(
+        session.get_checkpoint(&checkpoint.id).unwrap().content,
+        "雨落在长街上。"
+    );
+}
+
+#[test]
+fn packaging_embeds_the_frontend_with_strict_current_user_permissions() {
+    let config: serde_json::Value =
+        serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    let capability: serde_json::Value =
+        serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+
+    assert_eq!(config["build"]["frontendDist"], "../dist");
+    assert_eq!(config["build"]["beforeBuildCommand"], "npm run build");
+    assert_eq!(config["bundle"]["targets"], serde_json::json!(["nsis"]));
+    assert_eq!(
+        config["bundle"]["windows"]["nsis"]["installMode"],
+        "currentUser"
+    );
+    assert_eq!(
+        capability["permissions"],
+        serde_json::json!(["core:default", "dialog:allow-open"])
+    );
 }

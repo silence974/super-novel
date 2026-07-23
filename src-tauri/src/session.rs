@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use novel_backend::{BackendError, NovelBackend, Result, Workspace};
+use novel_backend::{
+    BackendError, Chapter, ChapterCheckpoint, CheckpointId, CreateChapter, CreateCheckpoint,
+    CreateVolume, NovelBackend, Result, SaveWorkingDraft, VolumeNode, Workspace,
+};
 
 #[derive(Clone, Default)]
 pub struct ProjectSession {
@@ -75,6 +78,26 @@ impl ProjectSession {
         };
         drop(backend);
         Ok(())
+    }
+
+    pub fn create_volume(&self, input: CreateVolume) -> Result<VolumeNode> {
+        self.with_backend(|backend| backend.create_volume(input))
+    }
+
+    pub fn create_chapter(&self, input: CreateChapter) -> Result<Chapter> {
+        self.with_backend(|backend| backend.create_chapter(input))
+    }
+
+    pub fn save_working_draft(&self, input: SaveWorkingDraft) -> Result<Chapter> {
+        self.with_backend(|backend| backend.save_working_draft(input))
+    }
+
+    pub fn create_checkpoint(&self, input: CreateCheckpoint) -> Result<ChapterCheckpoint> {
+        self.with_backend(|backend| backend.create_checkpoint(input))
+    }
+
+    pub fn get_checkpoint(&self, checkpoint_id: &CheckpointId) -> Result<ChapterCheckpoint> {
+        self.with_backend(|backend| backend.checkpoint(checkpoint_id))
     }
 
     pub(crate) fn with_backend<T>(

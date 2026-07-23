@@ -1,6 +1,6 @@
 use std::{
     path::Path,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use novel_backend::{
@@ -10,7 +10,7 @@ use novel_backend::{
 
 #[derive(Clone, Default)]
 pub struct ProjectSession {
-    state: Arc<Mutex<SessionState>>,
+    state: Arc<RwLock<SessionState>>,
 }
 
 #[derive(Default)]
@@ -22,14 +22,14 @@ enum SessionState {
 }
 
 struct OpeningAdmission {
-    state: Arc<Mutex<SessionState>>,
+    state: Arc<RwLock<SessionState>>,
     committed: bool,
 }
 
 impl OpeningAdmission {
     fn commit(mut self, backend: Arc<NovelBackend>) -> Result<()> {
         {
-            let mut state = self.state.lock().map_err(|_| BackendError::LockPoisoned)?;
+            let mut state = self.state.write().map_err(|_| BackendError::LockPoisoned)?;
             debug_assert!(matches!(*state, SessionState::Opening));
             *state = SessionState::Active(backend);
         }
@@ -43,7 +43,7 @@ impl Drop for OpeningAdmission {
         if self.committed {
             return;
         }
-        if let Ok(mut state) = self.state.lock()
+        if let Ok(mut state) = self.state.write()
             && matches!(*state, SessionState::Opening)
         {
             *state = SessionState::Empty;
@@ -66,7 +66,7 @@ impl ProjectSession {
 
     pub fn close(&self) -> Result<()> {
         let backend = {
-            let mut state = self.lock()?;
+            let mut state = self.write()?;
             match std::mem::take(&mut *state) {
                 SessionState::Empty => return Err(BackendError::NotInitialized),
                 SessionState::Opening => {
@@ -104,15 +104,13 @@ impl ProjectSession {
         &self,
         operation: impl FnOnce(&NovelBackend) -> Result<T>,
     ) -> Result<T> {
-        let backend = {
-            let state = self.lock()?;
-            match &*state {
-                SessionState::Empty => return Err(BackendError::NotInitialized),
-                SessionState::Opening => return Err(BackendError::ProjectLocked),
-                SessionState::Active(backend) => backend.clone(),
-            }
+        let state = self.read()?;
+        let backend = match &*state {
+            SessionState::Empty => return Err(BackendError::NotInitialized),
+            SessionState::Opening => return Err(BackendError::ProjectLocked),
+            SessionState::Active(backend) => backend,
         };
-        operation(&backend)
+        operation(backend)
     }
 
     fn activate_with(&self, operation: impl FnOnce() -> Result<NovelBackend>) -> Result<Workspace> {
@@ -125,7 +123,7 @@ impl ProjectSession {
 
     fn reserve_opening(&self) -> Result<OpeningAdmission> {
         {
-            let mut state = self.lock()?;
+            let mut state = self.write()?;
             match &*state {
                 SessionState::Empty => *state = SessionState::Opening,
                 SessionState::Opening | SessionState::Active(_) => {
@@ -139,8 +137,12 @@ impl ProjectSession {
         })
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, SessionState>> {
-        self.state.lock().map_err(|_| BackendError::LockPoisoned)
+    fn read(&self) -> Result<RwLockReadGuard<'_, SessionState>> {
+        self.state.read().map_err(|_| BackendError::LockPoisoned)
+    }
+
+    fn write(&self) -> Result<RwLockWriteGuard<'_, SessionState>> {
+        self.state.write().map_err(|_| BackendError::LockPoisoned)
     }
 }
 
@@ -149,11 +151,64 @@ mod tests {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::mpsc,
+        time::Duration,
     };
 
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn close_waits_for_an_in_flight_operation_before_opening_another_project() {
+        let root = tempdir().unwrap();
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        let session = ProjectSession::default();
+        session.create(&first, "甲").unwrap();
+        drop(NovelBackend::create_project(&second, "乙").unwrap());
+
+        let worker_session = session.clone();
+        let (operation_entered_tx, operation_entered_rx) = mpsc::channel();
+        let (release_operation_tx, release_operation_rx) = mpsc::channel();
+        let (operation_finished_tx, operation_finished_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_session.with_backend(|backend| {
+                operation_entered_tx.send(()).unwrap();
+                release_operation_rx.recv().unwrap();
+                backend.create_volume(CreateVolume {
+                    title: "旧项目中的写入".into(),
+                })?;
+                operation_finished_tx.send(()).unwrap();
+                Ok(())
+            })
+        });
+
+        operation_entered_rx.recv().unwrap();
+        let lifecycle_session = session.clone();
+        let (lifecycle_started_tx, lifecycle_started_rx) = mpsc::channel();
+        let (lifecycle_finished_tx, lifecycle_finished_rx) = mpsc::channel();
+        let lifecycle = std::thread::spawn(move || -> Result<()> {
+            lifecycle_started_tx.send(()).unwrap();
+            lifecycle_session.close()?;
+            let workspace = lifecycle_session.open(&second)?;
+            lifecycle_finished_tx.send(workspace.project.name).unwrap();
+            Ok(())
+        });
+
+        lifecycle_started_rx.recv().unwrap();
+        assert!(matches!(
+            lifecycle_finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        release_operation_tx.send(()).unwrap();
+        operation_finished_rx.recv().unwrap();
+        assert_eq!(lifecycle_finished_rx.recv().unwrap(), "乙");
+        worker.join().unwrap().unwrap();
+        lifecycle.join().unwrap().unwrap();
+    }
 
     #[test]
     fn opening_admission_rejects_other_projects_and_close_before_touching_disk() {
@@ -230,5 +285,38 @@ mod tests {
         assert!(panic.is_err());
 
         session.create(&project, "甲").unwrap();
+    }
+
+    #[test]
+    fn failed_backend_operation_releases_the_lifecycle_gate() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let session = ProjectSession::default();
+        session.create(&project, "甲").unwrap();
+
+        let error: Result<()> =
+            session.with_backend(|_| Err(BackendError::Validation("injected failure".into())));
+        assert!(matches!(error, Err(BackendError::Validation(_))));
+
+        session.close().unwrap();
+        session.open(&project).unwrap();
+    }
+
+    #[test]
+    fn panicking_backend_operation_releases_the_lifecycle_gate_without_poisoning_it() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let session = ProjectSession::default();
+        session.create(&project, "甲").unwrap();
+
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            session.with_backend::<()>(|_| panic!("injected backend panic"))
+        }));
+        assert!(panic.is_err());
+
+        session.close().unwrap();
+        session.open(&project).unwrap();
     }
 }

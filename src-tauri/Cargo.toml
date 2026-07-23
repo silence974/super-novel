@@ -1,0 +1,23 @@
+[package]
+name = "super-novel-desktop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "super_novel_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+novel-backend = { path = "../crates/novel-backend" }
+serde.workspace = true
+serde_json = "=1.0.149"
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.7.2"
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

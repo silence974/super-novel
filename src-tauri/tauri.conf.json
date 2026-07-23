@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Super Novel",
+  "version": "0.1.0",
+  "identifier": "com.supernovel.desktop",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Super Novel",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"]
+  }
+}

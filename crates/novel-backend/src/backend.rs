@@ -25,7 +25,23 @@ impl NovelBackend {
     }
 
     fn from_connection(connection: Connection) -> Result<Self> {
-        connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        let journal_mode: String =
+            connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            return Err(BackendError::CorruptData(format!(
+                "journal_mode must be wal, got {journal_mode}"
+            )));
+        }
+
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let foreign_keys: i64 =
+            connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+        if foreign_keys != 1 {
+            return Err(BackendError::CorruptData(format!(
+                "foreign_keys must be 1, got {foreign_keys}"
+            )));
+        }
+
         connection.execute_batch(MIGRATION_1)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -609,7 +625,19 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::NovelBackend;
+    use crate::BackendError;
     use tempfile::tempdir;
+
+    #[test]
+    fn rejects_connections_that_cannot_enable_wal() {
+        let error = match NovelBackend::open(":memory:") {
+            Ok(_) => panic!("in-memory connection must not be accepted"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, BackendError::CorruptData(message)
+            if message.contains("journal_mode") && message.contains("memory")));
+    }
 
     #[test]
     fn file_connection_enables_wal_and_foreign_keys() {

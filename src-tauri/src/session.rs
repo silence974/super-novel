@@ -18,6 +18,36 @@ enum SessionState {
     Active(Arc<NovelBackend>),
 }
 
+struct OpeningAdmission {
+    state: Arc<Mutex<SessionState>>,
+    committed: bool,
+}
+
+impl OpeningAdmission {
+    fn commit(mut self, backend: Arc<NovelBackend>) -> Result<()> {
+        {
+            let mut state = self.state.lock().map_err(|_| BackendError::LockPoisoned)?;
+            debug_assert!(matches!(*state, SessionState::Opening));
+            *state = SessionState::Active(backend);
+        }
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for OpeningAdmission {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if let Ok(mut state) = self.state.lock()
+            && matches!(*state, SessionState::Opening)
+        {
+            *state = SessionState::Empty;
+        }
+    }
+}
+
 impl ProjectSession {
     pub fn create(
         &self,
@@ -63,6 +93,14 @@ impl ProjectSession {
     }
 
     fn activate_with(&self, operation: impl FnOnce() -> Result<NovelBackend>) -> Result<Workspace> {
+        let admission = self.reserve_opening()?;
+        let backend = operation()?;
+        let workspace = backend.workspace()?;
+        admission.commit(Arc::new(backend))?;
+        Ok(workspace)
+    }
+
+    fn reserve_opening(&self) -> Result<OpeningAdmission> {
         {
             let mut state = self.lock()?;
             match &*state {
@@ -72,25 +110,10 @@ impl ProjectSession {
                 }
             }
         }
-
-        let opened = (|| {
-            let backend = operation()?;
-            let workspace = backend.workspace()?;
-            Ok((Arc::new(backend), workspace))
-        })();
-
-        let mut state = self.lock()?;
-        debug_assert!(matches!(*state, SessionState::Opening));
-        match opened {
-            Ok((backend, workspace)) => {
-                *state = SessionState::Active(backend);
-                Ok(workspace)
-            }
-            Err(error) => {
-                *state = SessionState::Empty;
-                Err(error)
-            }
-        }
+        Ok(OpeningAdmission {
+            state: self.state.clone(),
+            committed: false,
+        })
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, SessionState>> {
@@ -100,7 +123,10 @@ impl ProjectSession {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::mpsc,
+    };
 
     use tempfile::tempdir;
 
@@ -165,6 +191,21 @@ mod tests {
         let session = ProjectSession::default();
 
         session.create(&project, " ").unwrap_err();
+        session.create(&project, "甲").unwrap();
+    }
+
+    #[test]
+    fn panicking_activation_releases_admission_during_unwind() {
+        let root = tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let session = ProjectSession::default();
+
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            session.activate_with(|| panic!("injected activation panic"))
+        }));
+        assert!(panic.is_err());
+
         session.create(&project, "甲").unwrap();
     }
 }

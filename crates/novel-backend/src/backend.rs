@@ -24,11 +24,6 @@ impl NovelBackend {
         Self::from_connection(connection)
     }
 
-    pub fn open_in_memory() -> Result<Self> {
-        let connection = Connection::open_in_memory()?;
-        Self::from_connection(connection)
-    }
-
     fn from_connection(connection: Connection) -> Result<Self> {
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         connection.execute_batch(MIGRATION_1)?;
@@ -609,4 +604,27 @@ fn count_non_whitespace(content: &str) -> u64 {
 
 fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NovelBackend;
+    use tempfile::tempdir;
+
+    #[test]
+    fn file_connection_enables_wal_and_foreign_keys() {
+        let directory = tempdir().expect("temporary directory");
+        let backend = NovelBackend::open(directory.path().join("project.db"))
+            .expect("open file-backed backend");
+        let connection = backend.connection.lock().expect("lock backend connection");
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("read journal mode");
+        let foreign_keys: i64 = connection
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("read foreign key setting");
+
+        assert_eq!(journal_mode, "wal");
+        assert_eq!(foreign_keys, 1);
+    }
 }

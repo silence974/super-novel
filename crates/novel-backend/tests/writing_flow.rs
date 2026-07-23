@@ -2,7 +2,7 @@ use novel_backend::{
     BackendError, CreateChapter, CreateVolume, NovelBackend, RestoreChapter, SaveChapter,
     SaveSource,
 };
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 
 #[test]
 fn creates_a_persistent_outline_and_draft() {
@@ -52,7 +52,7 @@ fn creates_a_persistent_outline_and_draft() {
 
 #[test]
 fn rejects_stale_saves_instead_of_overwriting_newer_text() {
-    let backend = initialized_backend();
+    let (_directory, backend) = initialized_backend();
     let chapter = backend
         .create_chapter(CreateChapter {
             volume_id: None,
@@ -88,7 +88,7 @@ fn rejects_stale_saves_instead_of_overwriting_newer_text() {
 
 #[test]
 fn restoring_old_text_creates_a_new_auditable_revision() {
-    let backend = initialized_backend();
+    let (_directory, backend) = initialized_backend();
     let chapter = backend
         .create_chapter(CreateChapter {
             volume_id: None,
@@ -131,10 +131,11 @@ fn restoring_old_text_creates_a_new_auditable_revision() {
     assert_eq!(revisions[0].restored_from_revision, Some(1));
 }
 
-fn initialized_backend() -> NovelBackend {
-    let backend = NovelBackend::open_in_memory().expect("open backend");
+fn initialized_backend() -> (TempDir, NovelBackend) {
+    let directory = tempdir().expect("temporary directory");
+    let backend = NovelBackend::open(directory.path().join("project.db")).expect("open backend");
     backend
         .initialize_project("测试作品")
         .expect("initialize project");
-    backend
+    (directory, backend)
 }

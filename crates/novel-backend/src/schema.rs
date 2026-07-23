@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS chapters (
     title TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('planning', 'drafting', 'revising', 'final')),
     position INTEGER NOT NULL,
-    current_revision INTEGER NOT NULL,
     non_whitespace_char_count INTEGER NOT NULL,
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
@@ -51,16 +50,29 @@ CREATE TABLE IF NOT EXISTS chapters (
 CREATE INDEX IF NOT EXISTS chapters_work_order
     ON chapters(work_id, volume_id, position);
 
-CREATE TABLE IF NOT EXISTS chapter_revisions (
-    chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
-    revision INTEGER NOT NULL,
+CREATE TABLE IF NOT EXISTS chapter_drafts (
+    chapter_id TEXT PRIMARY KEY REFERENCES chapters(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('user', 'import', 'ai_accepted', 'restore')),
-    restored_from_revision INTEGER,
-    non_whitespace_char_count INTEGER NOT NULL,
-    created_at_ms INTEGER NOT NULL,
-    PRIMARY KEY(chapter_id, revision)
+    edit_revision INTEGER NOT NULL CHECK(edit_revision >= 0),
+    checkpointed_edit_revision INTEGER,
+    updated_at_ms INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS chapter_checkpoints (
+    id TEXT PRIMARY KEY,
+    chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+    source TEXT NOT NULL CHECK(source IN (
+        'manual', 'periodic', 'chapter_switch', 'project_close', 'restore'
+    )),
+    source_edit_revision INTEGER NOT NULL CHECK(source_edit_revision >= 0),
+    restored_from_checkpoint_id TEXT REFERENCES chapter_checkpoints(id),
+    content TEXT NOT NULL,
+    non_whitespace_char_count INTEGER NOT NULL CHECK(non_whitespace_char_count >= 0),
+    created_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS chapter_checkpoints_chapter_time
+    ON chapter_checkpoints(chapter_id, created_at_ms DESC, id DESC);
 
 INSERT INTO app_metadata(key, value)
 VALUES ('schema_version', '1')

@@ -35,6 +35,7 @@ id_type!(ProjectId);
 id_type!(WorkId);
 id_type!(VolumeId);
 id_type!(ChapterId);
+id_type!(CheckpointId);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,34 +62,37 @@ impl FromStr for ChapterStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SaveSource {
-    User,
-    Import,
-    AiAccepted,
+pub enum CheckpointSource {
+    Manual,
+    Periodic,
+    ChapterSwitch,
+    ProjectClose,
     Restore,
 }
 
-impl SaveSource {
+impl CheckpointSource {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
-            Self::User => "user",
-            Self::Import => "import",
-            Self::AiAccepted => "ai_accepted",
+            Self::Manual => "manual",
+            Self::Periodic => "periodic",
+            Self::ChapterSwitch => "chapter_switch",
+            Self::ProjectClose => "project_close",
             Self::Restore => "restore",
         }
     }
 }
 
-impl FromStr for SaveSource {
+impl FromStr for CheckpointSource {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match value {
-            "user" => Ok(Self::User),
-            "import" => Ok(Self::Import),
-            "ai_accepted" => Ok(Self::AiAccepted),
+            "manual" => Ok(Self::Manual),
+            "periodic" => Ok(Self::Periodic),
+            "chapter_switch" => Ok(Self::ChapterSwitch),
+            "project_close" => Ok(Self::ProjectClose),
             "restore" => Ok(Self::Restore),
-            _ => Err(format!("unknown save source `{value}`")),
+            _ => Err(format!("unknown checkpoint source `{value}`")),
         }
     }
 }
@@ -119,19 +123,26 @@ pub struct CreateChapter {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SaveChapter {
+pub struct SaveWorkingDraft {
     pub chapter_id: ChapterId,
-    pub expected_revision: u64,
+    pub expected_edit_revision: u64,
     pub content: String,
-    pub source: SaveSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RestoreChapter {
+pub struct CreateCheckpoint {
     pub chapter_id: ChapterId,
-    pub expected_revision: u64,
-    pub restore_revision: u64,
+    pub expected_edit_revision: u64,
+    pub source: CheckpointSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreCheckpoint {
+    pub chapter_id: ChapterId,
+    pub checkpoint_id: CheckpointId,
+    pub expected_edit_revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +154,7 @@ pub struct Chapter {
     pub status: ChapterStatus,
     pub position: i64,
     pub content: String,
-    pub current_revision: u64,
+    pub edit_revision: u64,
     pub non_whitespace_char_count: u64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -156,7 +167,7 @@ pub struct ChapterSummary {
     pub title: String,
     pub status: ChapterStatus,
     pub position: i64,
-    pub current_revision: u64,
+    pub edit_revision: u64,
     pub non_whitespace_char_count: u64,
     pub updated_at_ms: i64,
 }
@@ -180,10 +191,25 @@ pub struct Outline {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChapterRevision {
-    pub revision: u64,
-    pub source: SaveSource,
-    pub restored_from_revision: Option<u64>,
+pub struct ChapterCheckpoint {
+    pub id: CheckpointId,
+    pub chapter_id: ChapterId,
+    pub source: CheckpointSource,
+    pub source_edit_revision: u64,
+    pub restored_from_checkpoint_id: Option<CheckpointId>,
+    pub content: String,
+    pub non_whitespace_char_count: u64,
+    pub created_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterCheckpointSummary {
+    pub id: CheckpointId,
+    pub chapter_id: ChapterId,
+    pub source: CheckpointSource,
+    pub source_edit_revision: u64,
+    pub restored_from_checkpoint_id: Option<CheckpointId>,
     pub non_whitespace_char_count: u64,
     pub created_at_ms: i64,
 }

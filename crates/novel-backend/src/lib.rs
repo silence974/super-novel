@@ -7,7 +7,7 @@ mod sqlite_value;
 pub use backend::NovelBackend;
 pub use error::{BackendError, Result};
 pub use model::{
-    Chapter, ChapterId, ChapterRevision, ChapterStatus, ChapterSummary, CreateChapter,
-    CreateVolume, Outline, Project, ProjectId, RestoreChapter, SaveChapter, SaveSource, VolumeId,
-    VolumeNode, WorkId,
+    Chapter, ChapterCheckpoint, ChapterCheckpointSummary, ChapterId, ChapterStatus, ChapterSummary,
+    CheckpointId, CheckpointSource, CreateChapter, CreateCheckpoint, CreateVolume, Outline,
+    Project, ProjectId, RestoreCheckpoint, SaveWorkingDraft, VolumeId, VolumeNode, WorkId,
 };

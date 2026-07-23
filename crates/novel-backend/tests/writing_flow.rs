@@ -1,82 +1,46 @@
+use std::ops::Deref;
+
 use novel_backend::{
-    BackendError, CreateChapter, CreateVolume, NovelBackend, RestoreChapter, SaveChapter,
-    SaveSource,
+    BackendError, Chapter, CheckpointSource, CreateChapter, CreateCheckpoint, NovelBackend,
+    RestoreCheckpoint, SaveWorkingDraft,
 };
 use tempfile::{TempDir, tempdir};
 
 #[test]
-fn creates_a_persistent_outline_and_draft() {
-    let directory = tempdir().expect("temporary directory");
-    let database_path = directory.path().join("project.db");
-
-    let backend = NovelBackend::open(&database_path).expect("open backend");
-    let project = backend
-        .initialize_project("长夜书")
-        .expect("initialize project");
-    let volume = backend
-        .create_volume(CreateVolume {
-            title: "第一卷 风起".into(),
-        })
-        .expect("create volume");
-    let chapter = backend
-        .create_chapter(CreateChapter {
-            volume_id: Some(volume.id.clone()),
-            title: "雨夜来客".into(),
-        })
-        .expect("create chapter");
-
+fn autosave_updates_one_working_draft_without_creating_history() {
+    let (backend, chapter) = chapter_fixture();
     let saved = backend
-        .save_chapter(SaveChapter {
+        .save_working_draft(SaveWorkingDraft {
             chapter_id: chapter.id.clone(),
-            expected_revision: 0,
-            content: "雨落在长街上。\n林澈推开门。".into(),
-            source: SaveSource::User,
+            expected_edit_revision: 0,
+            content: "第一份草稿".into(),
         })
-        .expect("save draft");
-    assert_eq!(saved.current_revision, 1);
-    assert_eq!(saved.non_whitespace_char_count, 13);
+        .unwrap();
 
-    drop(backend);
-    let reopened = NovelBackend::open(&database_path).expect("reopen backend");
-    assert_eq!(reopened.project().expect("load project").id, project.id);
-
-    let outline = reopened.outline().expect("load outline");
-    assert_eq!(outline.volumes.len(), 1);
-    assert_eq!(outline.volumes[0].chapters.len(), 1);
-    assert_eq!(outline.volumes[0].chapters[0].current_revision, 1);
-    assert_eq!(
-        reopened.chapter(&chapter.id).expect("load chapter").content,
-        "雨落在长街上。\n林澈推开门。"
-    );
+    assert_eq!(saved.edit_revision, 1);
+    assert_eq!(saved.content, "第一份草稿");
+    assert!(backend.list_checkpoints(&chapter.id).unwrap().is_empty());
 }
 
 #[test]
-fn rejects_stale_saves_instead_of_overwriting_newer_text() {
-    let (_directory, backend) = initialized_backend();
-    let chapter = backend
-        .create_chapter(CreateChapter {
-            volume_id: None,
-            title: "序章".into(),
-        })
-        .expect("create chapter");
-
+fn stale_autosave_never_overwrites_newer_text() {
+    let (backend, chapter) = chapter_fixture();
     backend
-        .save_chapter(SaveChapter {
+        .save_working_draft(SaveWorkingDraft {
             chapter_id: chapter.id.clone(),
-            expected_revision: 0,
-            content: "第一份保存".into(),
-            source: SaveSource::User,
+            expected_edit_revision: 0,
+            content: "新内容".into(),
         })
-        .expect("first save");
+        .unwrap();
 
     let error = backend
-        .save_chapter(SaveChapter {
-            chapter_id: chapter.id,
-            expected_revision: 0,
-            content: "来自旧窗口的覆盖".into(),
-            source: SaveSource::User,
+        .save_working_draft(SaveWorkingDraft {
+            chapter_id: chapter.id.clone(),
+            expected_edit_revision: 0,
+            content: "旧窗口内容".into(),
         })
-        .expect_err("stale save must fail");
+        .unwrap_err();
+
     assert!(matches!(
         error,
         BackendError::RevisionConflict {
@@ -84,58 +48,135 @@ fn rejects_stale_saves_instead_of_overwriting_newer_text() {
             current: 1
         }
     ));
+    assert_eq!(backend.chapter(&chapter.id).unwrap().content, "新内容");
 }
 
 #[test]
-fn restoring_old_text_creates_a_new_auditable_revision() {
-    let (_directory, backend) = initialized_backend();
+fn unchanged_draft_reuses_latest_checkpoint() {
+    let (backend, chapter) = saved_chapter_fixture("不会重复");
+    let first = backend
+        .create_checkpoint(CreateCheckpoint {
+            chapter_id: chapter.id.clone(),
+            expected_edit_revision: 1,
+            source: CheckpointSource::Manual,
+        })
+        .unwrap();
+    let second = backend
+        .create_checkpoint(CreateCheckpoint {
+            chapter_id: chapter.id,
+            expected_edit_revision: 1,
+            source: CheckpointSource::Periodic,
+        })
+        .unwrap();
+
+    assert_eq!(second.id, first.id);
+}
+
+#[test]
+fn restore_copies_old_text_and_appends_an_audit_checkpoint() {
+    let (backend, chapter) = saved_chapter_fixture("旧稿");
+    let old = backend
+        .create_checkpoint(CreateCheckpoint {
+            chapter_id: chapter.id.clone(),
+            expected_edit_revision: 1,
+            source: CheckpointSource::Manual,
+        })
+        .unwrap();
+    backend
+        .save_working_draft(SaveWorkingDraft {
+            chapter_id: chapter.id.clone(),
+            expected_edit_revision: 1,
+            content: "新稿".into(),
+        })
+        .unwrap();
+
+    let restored = backend
+        .restore_checkpoint(RestoreCheckpoint {
+            chapter_id: chapter.id.clone(),
+            checkpoint_id: old.id.clone(),
+            expected_edit_revision: 2,
+        })
+        .unwrap();
+
+    assert_eq!(restored.content, "旧稿");
+    assert_eq!(restored.edit_revision, 3);
+    let history = backend.list_checkpoints(&chapter.id).unwrap();
+    assert_eq!(history[0].source, CheckpointSource::Restore);
+    assert_eq!(history[0].restored_from_checkpoint_id, Some(old.id));
+}
+
+#[test]
+fn reopens_a_file_database_and_reads_the_working_draft() {
+    let directory = tempdir().expect("temporary directory");
+    let database_path = directory.path().join("project.db");
+    let backend = NovelBackend::open(&database_path).expect("open backend");
+    backend
+        .initialize_project("测试作品")
+        .expect("initialize project");
     let chapter = backend
         .create_chapter(CreateChapter {
             volume_id: None,
             title: "序章".into(),
         })
         .expect("create chapter");
-
-    let first = backend
-        .save_chapter(SaveChapter {
+    backend
+        .save_working_draft(SaveWorkingDraft {
             chapter_id: chapter.id.clone(),
-            expected_revision: 0,
-            content: "旧稿".into(),
-            source: SaveSource::User,
+            expected_edit_revision: 0,
+            content: "持久草稿".into(),
         })
-        .expect("save old draft");
-    let second = backend
-        .save_chapter(SaveChapter {
-            chapter_id: chapter.id.clone(),
-            expected_revision: first.current_revision,
-            content: "新稿".into(),
-            source: SaveSource::User,
-        })
-        .expect("save new draft");
+        .expect("save working draft");
 
-    let restored = backend
-        .restore_chapter(RestoreChapter {
-            chapter_id: chapter.id.clone(),
-            expected_revision: second.current_revision,
-            restore_revision: 1,
-        })
-        .expect("restore old draft");
-    assert_eq!(restored.content, "旧稿");
-    assert_eq!(restored.current_revision, 3);
+    drop(backend);
 
-    let revisions = backend
-        .chapter_revisions(&chapter.id)
-        .expect("load revisions");
-    assert_eq!(revisions[0].revision, 3);
-    assert_eq!(revisions[0].source, SaveSource::Restore);
-    assert_eq!(revisions[0].restored_from_revision, Some(1));
+    let reopened = NovelBackend::open(&database_path).expect("reopen backend");
+    let loaded = reopened.chapter(&chapter.id).expect("load working draft");
+    assert_eq!(loaded.content, "持久草稿");
+    assert_eq!(loaded.edit_revision, 1);
 }
 
-fn initialized_backend() -> (TempDir, NovelBackend) {
+struct TestBackend {
+    backend: NovelBackend,
+    _directory: TempDir,
+}
+
+impl Deref for TestBackend {
+    type Target = NovelBackend;
+
+    fn deref(&self) -> &Self::Target {
+        &self.backend
+    }
+}
+
+fn chapter_fixture() -> (TestBackend, Chapter) {
     let directory = tempdir().expect("temporary directory");
     let backend = NovelBackend::open(directory.path().join("project.db")).expect("open backend");
     backend
         .initialize_project("测试作品")
         .expect("initialize project");
-    (directory, backend)
+    let chapter = backend
+        .create_chapter(CreateChapter {
+            volume_id: None,
+            title: "序章".into(),
+        })
+        .expect("create chapter");
+    (
+        TestBackend {
+            backend,
+            _directory: directory,
+        },
+        chapter,
+    )
+}
+
+fn saved_chapter_fixture(content: &str) -> (TestBackend, Chapter) {
+    let (backend, chapter) = chapter_fixture();
+    let chapter = backend
+        .save_working_draft(SaveWorkingDraft {
+            chapter_id: chapter.id,
+            expected_edit_revision: 0,
+            content: content.into(),
+        })
+        .expect("save working draft");
+    (backend, chapter)
 }

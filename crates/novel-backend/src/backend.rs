@@ -4,9 +4,10 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{
-    BackendError, Chapter, ChapterId, ChapterRevision, ChapterStatus, ChapterSummary,
-    CreateChapter, CreateVolume, Outline, Project, ProjectId, RestoreChapter, Result, SaveChapter,
-    SaveSource, VolumeId, VolumeNode, WorkId,
+    BackendError, Chapter, ChapterCheckpoint, ChapterCheckpointSummary, ChapterId, ChapterStatus,
+    ChapterSummary, CheckpointId, CheckpointSource, CreateChapter, CreateCheckpoint, CreateVolume,
+    Outline, Project, ProjectId, RestoreCheckpoint, Result, SaveWorkingDraft, VolumeId, VolumeNode,
+    WorkId,
     schema::{MIGRATION_1, SCHEMA_VERSION},
     sqlite_value::{from_sql_i64, to_sql_i64},
 };
@@ -129,9 +130,9 @@ impl NovelBackend {
 
         transaction.execute(
             "INSERT INTO chapters(
-                id, work_id, volume_id, title, status, position, current_revision,
+                id, work_id, volume_id, title, status, position,
                 non_whitespace_char_count, created_at_ms, updated_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, 'planning', ?5, 0, 0, ?6, ?6)",
+             ) VALUES (?1, ?2, ?3, ?4, 'planning', ?5, 0, ?6, ?6)",
             params![
                 chapter_id.as_str(),
                 work_id.as_str(),
@@ -142,10 +143,9 @@ impl NovelBackend {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO chapter_revisions(
-                chapter_id, revision, content, source, restored_from_revision,
-                non_whitespace_char_count, created_at_ms
-             ) VALUES (?1, 0, '', 'user', NULL, 0, ?2)",
+            "INSERT INTO chapter_drafts(
+                chapter_id, content, edit_revision, checkpointed_edit_revision, updated_at_ms
+             ) VALUES (?1, '', 0, NULL, ?2)",
             params![chapter_id.as_str(), now],
         )?;
         touch_project(&transaction, now)?;
@@ -158,7 +158,7 @@ impl NovelBackend {
             status: ChapterStatus::Planning,
             position,
             content: String::new(),
-            current_revision: 0,
+            edit_revision: 0,
             non_whitespace_char_count: 0,
             created_at_ms: now,
             updated_at_ms: now,
@@ -173,62 +173,91 @@ impl NovelBackend {
         })
     }
 
-    pub fn save_chapter(&self, input: SaveChapter) -> Result<Chapter> {
+    pub fn save_working_draft(&self, input: SaveWorkingDraft) -> Result<Chapter> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
-        save_revision(
+        let current = current_edit_revision(&transaction, &input.chapter_id)?;
+        if current != input.expected_edit_revision {
+            return Err(BackendError::RevisionConflict {
+                expected: input.expected_edit_revision,
+                current,
+            });
+        }
+        let next = current
+            .checked_add(1)
+            .ok_or_else(|| BackendError::CorruptData("edit_revision overflow".into()))?;
+        let char_count = count_non_whitespace(&input.content);
+        let now = now_ms();
+        transaction.execute(
+            "UPDATE chapter_drafts
+             SET content = ?2, edit_revision = ?3, updated_at_ms = ?4
+             WHERE chapter_id = ?1",
+            params![
+                input.chapter_id.as_str(),
+                input.content,
+                to_sql_i64(next, "edit_revision")?,
+                now
+            ],
+        )?;
+        update_chapter_after_draft(&transaction, &input.chapter_id, char_count, now)?;
+        let chapter = load_chapter(&transaction, &input.chapter_id)?.ok_or_else(|| {
+            BackendError::NotFound {
+                resource: "chapter",
+                id: input.chapter_id.to_string(),
+            }
+        })?;
+        transaction.commit()?;
+        Ok(chapter)
+    }
+
+    pub fn create_checkpoint(&self, input: CreateCheckpoint) -> Result<ChapterCheckpoint> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let draft = load_draft(&transaction, &input.chapter_id)?;
+        if draft.edit_revision != input.expected_edit_revision {
+            return Err(BackendError::RevisionConflict {
+                expected: input.expected_edit_revision,
+                current: draft.edit_revision,
+            });
+        }
+
+        if draft.checkpointed_edit_revision == Some(draft.edit_revision) {
+            let checkpoint =
+                load_latest_checkpoint(&transaction, &input.chapter_id)?.ok_or_else(|| {
+                    BackendError::CorruptData(format!(
+                        "chapter {} records checkpointed edit revision {} without a checkpoint",
+                        input.chapter_id, draft.edit_revision
+                    ))
+                })?;
+            transaction.commit()?;
+            return Ok(checkpoint);
+        }
+
+        let checkpoint = insert_checkpoint(
             &transaction,
             &input.chapter_id,
-            input.expected_revision,
-            input.content,
-            input.source,
+            &input.source,
+            draft.edit_revision,
             None,
+            &draft.content,
         )?;
-        let chapter = load_chapter(&transaction, &input.chapter_id)?.ok_or_else(|| {
-            BackendError::NotFound {
-                resource: "chapter",
-                id: input.chapter_id.to_string(),
-            }
-        })?;
+        transaction.execute(
+            "UPDATE chapter_drafts
+             SET checkpointed_edit_revision = ?2
+             WHERE chapter_id = ?1",
+            params![
+                input.chapter_id.as_str(),
+                to_sql_i64(draft.edit_revision, "checkpointed_edit_revision")?
+            ],
+        )?;
         transaction.commit()?;
-        Ok(chapter)
+        Ok(checkpoint)
     }
 
-    pub fn restore_chapter(&self, input: RestoreChapter) -> Result<Chapter> {
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction()?;
-        let restore_revision = to_sql_i64(input.restore_revision, "restore_revision")?;
-        let content = transaction
-            .query_row(
-                "SELECT content FROM chapter_revisions WHERE chapter_id = ?1 AND revision = ?2",
-                params![input.chapter_id.as_str(), restore_revision],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .ok_or_else(|| BackendError::NotFound {
-                resource: "chapter revision",
-                id: format!("{}@{}", input.chapter_id, input.restore_revision),
-            })?;
-
-        save_revision(
-            &transaction,
-            &input.chapter_id,
-            input.expected_revision,
-            content,
-            SaveSource::Restore,
-            Some(input.restore_revision),
-        )?;
-        let chapter = load_chapter(&transaction, &input.chapter_id)?.ok_or_else(|| {
-            BackendError::NotFound {
-                resource: "chapter",
-                id: input.chapter_id.to_string(),
-            }
-        })?;
-        transaction.commit()?;
-        Ok(chapter)
-    }
-
-    pub fn chapter_revisions(&self, chapter_id: &ChapterId) -> Result<Vec<ChapterRevision>> {
+    pub fn list_checkpoints(
+        &self,
+        chapter_id: &ChapterId,
+    ) -> Result<Vec<ChapterCheckpointSummary>> {
         let connection = self.lock()?;
         if !chapter_exists(&connection, chapter_id)? {
             return Err(BackendError::NotFound {
@@ -238,36 +267,112 @@ impl NovelBackend {
         }
 
         let mut statement = connection.prepare(
-            "SELECT revision, source, restored_from_revision,
+            "SELECT id, chapter_id, source, source_edit_revision,
+                    restored_from_checkpoint_id,
                     non_whitespace_char_count, created_at_ms
-             FROM chapter_revisions
+             FROM chapter_checkpoints
              WHERE chapter_id = ?1
-             ORDER BY revision DESC",
+             ORDER BY created_at_ms DESC, id DESC",
         )?;
         let rows = statement.query_map([chapter_id.as_str()], |row| {
-            let source: String = row.get(1)?;
+            let source: String = row.get(2)?;
             Ok((
-                row.get::<_, i64>(0)?,
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
                 source,
-                row.get::<_, Option<i64>>(2)?,
                 row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
             ))
         })?;
 
         rows.map(|row| {
-            let (revision, source, restored_from_revision, char_count, created_at_ms) = row?;
-            Ok(ChapterRevision {
-                revision: from_sql_i64(revision, "revision")?,
-                source: parse_save_source(&source)?,
-                restored_from_revision: restored_from_revision
-                    .map(|revision| from_sql_i64(revision, "restored_from_revision"))
-                    .transpose()?,
+            let (
+                id,
+                chapter_id,
+                source,
+                source_edit_revision,
+                restored_from_checkpoint_id,
+                char_count,
+                created_at_ms,
+            ) = row?;
+            Ok(ChapterCheckpointSummary {
+                id: CheckpointId::from_stored(id),
+                chapter_id: ChapterId::from_stored(chapter_id),
+                source: parse_checkpoint_source(&source)?,
+                source_edit_revision: from_sql_i64(source_edit_revision, "source_edit_revision")?,
+                restored_from_checkpoint_id: restored_from_checkpoint_id
+                    .map(CheckpointId::from_stored),
                 non_whitespace_char_count: from_sql_i64(char_count, "non_whitespace_char_count")?,
                 created_at_ms,
             })
         })
         .collect()
+    }
+
+    pub fn checkpoint(&self, checkpoint_id: &CheckpointId) -> Result<ChapterCheckpoint> {
+        let connection = self.lock()?;
+        load_checkpoint(&connection, checkpoint_id)?.ok_or_else(|| BackendError::NotFound {
+            resource: "chapter checkpoint",
+            id: checkpoint_id.to_string(),
+        })
+    }
+
+    pub fn restore_checkpoint(&self, input: RestoreCheckpoint) -> Result<Chapter> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let current = current_edit_revision(&transaction, &input.chapter_id)?;
+        if current != input.expected_edit_revision {
+            return Err(BackendError::RevisionConflict {
+                expected: input.expected_edit_revision,
+                current,
+            });
+        }
+        let checkpoint =
+            load_checkpoint_for_chapter(&transaction, &input.checkpoint_id, &input.chapter_id)?
+                .ok_or_else(|| BackendError::NotFound {
+                    resource: "chapter checkpoint",
+                    id: input.checkpoint_id.to_string(),
+                })?;
+        let next = current
+            .checked_add(1)
+            .ok_or_else(|| BackendError::CorruptData("edit_revision overflow".into()))?;
+        let now = now_ms();
+        transaction.execute(
+            "UPDATE chapter_drafts
+             SET content = ?2, edit_revision = ?3, checkpointed_edit_revision = ?3,
+                 updated_at_ms = ?4
+             WHERE chapter_id = ?1",
+            params![
+                input.chapter_id.as_str(),
+                checkpoint.content,
+                to_sql_i64(next, "edit_revision")?,
+                now
+            ],
+        )?;
+        update_chapter_after_draft(
+            &transaction,
+            &input.chapter_id,
+            checkpoint.non_whitespace_char_count,
+            now,
+        )?;
+        insert_checkpoint(
+            &transaction,
+            &input.chapter_id,
+            &CheckpointSource::Restore,
+            next,
+            Some(&input.checkpoint_id),
+            &checkpoint.content,
+        )?;
+        let chapter = load_chapter(&transaction, &input.chapter_id)?.ok_or_else(|| {
+            BackendError::NotFound {
+                resource: "chapter",
+                id: input.chapter_id.to_string(),
+            }
+        })?;
+        transaction.commit()?;
+        Ok(chapter)
     }
 
     pub fn outline(&self) -> Result<Outline> {
@@ -288,11 +393,12 @@ impl NovelBackend {
         let mut volumes = volume_rows.collect::<std::result::Result<Vec<_>, _>>()?;
 
         let mut chapters_statement = connection.prepare(
-            "SELECT id, volume_id, title, status, position, current_revision,
-                    non_whitespace_char_count, updated_at_ms
-             FROM chapters
-             WHERE work_id = ?1
-             ORDER BY CASE WHEN volume_id IS NULL THEN 0 ELSE 1 END, position, id",
+            "SELECT c.id, c.volume_id, c.title, c.status, c.position, d.edit_revision,
+                    c.non_whitespace_char_count, c.updated_at_ms
+             FROM chapters c
+             JOIN chapter_drafts d ON d.chapter_id = c.id
+             WHERE c.work_id = ?1
+             ORDER BY CASE WHEN c.volume_id IS NULL THEN 0 ELSE 1 END, c.position, c.id",
         )?;
         let chapter_rows = chapters_statement.query_map([work_id.as_str()], |row| {
             let status: String = row.get(3)?;
@@ -317,7 +423,7 @@ impl NovelBackend {
                 title,
                 status: parse_chapter_status(&status)?,
                 position,
-                current_revision: from_sql_i64(revision, "current_revision")?,
+                edit_revision: from_sql_i64(revision, "edit_revision")?,
                 non_whitespace_char_count: from_sql_i64(char_count, "non_whitespace_char_count")?,
                 updated_at_ms,
             };
@@ -353,66 +459,224 @@ impl NovelBackend {
     }
 }
 
-fn save_revision(
-    transaction: &Transaction<'_>,
-    chapter_id: &ChapterId,
-    expected_revision: u64,
-    content: String,
-    source: SaveSource,
-    restored_from_revision: Option<u64>,
-) -> Result<()> {
-    let current_revision = transaction
+fn current_edit_revision(connection: &Connection, chapter_id: &ChapterId) -> Result<u64> {
+    connection
         .query_row(
-            "SELECT current_revision FROM chapters WHERE id = ?1",
+            "SELECT edit_revision FROM chapter_drafts WHERE chapter_id = ?1",
             [chapter_id.as_str()],
             |row| row.get::<_, i64>(0),
         )
         .optional()?
-        .map(|revision| from_sql_i64(revision, "current_revision"))
+        .map(|revision| from_sql_i64(revision, "edit_revision"))
         .transpose()?
         .ok_or_else(|| BackendError::NotFound {
             resource: "chapter",
             id: chapter_id.to_string(),
-        })?;
+        })
+}
 
-    if current_revision != expected_revision {
-        return Err(BackendError::RevisionConflict {
-            expected: expected_revision,
-            current: current_revision,
-        });
-    }
+struct DraftState {
+    content: String,
+    edit_revision: u64,
+    checkpointed_edit_revision: Option<u64>,
+}
 
-    let new_revision = current_revision + 1;
-    let char_count = count_non_whitespace(&content);
-    let new_revision = to_sql_i64(new_revision, "revision")?;
-    let restored_from_revision = restored_from_revision
-        .map(|revision| to_sql_i64(revision, "restored_from_revision"))
-        .transpose()?;
-    let char_count = to_sql_i64(char_count, "non_whitespace_char_count")?;
+fn load_draft(connection: &Connection, chapter_id: &ChapterId) -> Result<DraftState> {
+    connection
+        .query_row(
+            "SELECT content, edit_revision, checkpointed_edit_revision
+             FROM chapter_drafts
+             WHERE chapter_id = ?1",
+            [chapter_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .map(
+            |(content, edit_revision, checkpointed_edit_revision)| -> Result<DraftState> {
+                Ok(DraftState {
+                    content,
+                    edit_revision: from_sql_i64(edit_revision, "edit_revision")?,
+                    checkpointed_edit_revision: checkpointed_edit_revision
+                        .map(|revision| from_sql_i64(revision, "checkpointed_edit_revision"))
+                        .transpose()?,
+                })
+            },
+        )
+        .transpose()?
+        .ok_or_else(|| BackendError::NotFound {
+            resource: "chapter",
+            id: chapter_id.to_string(),
+        })
+}
+
+fn insert_checkpoint(
+    transaction: &Transaction<'_>,
+    chapter_id: &ChapterId,
+    source: &CheckpointSource,
+    source_edit_revision: u64,
+    restored_from_checkpoint_id: Option<&CheckpointId>,
+    content: &str,
+) -> Result<ChapterCheckpoint> {
+    let checkpoint_id = CheckpointId::new();
+    let char_count = count_non_whitespace(content);
     let now = now_ms();
     transaction.execute(
-        "INSERT INTO chapter_revisions(
-            chapter_id, revision, content, source, restored_from_revision,
+        "INSERT INTO chapter_checkpoints(
+            id, chapter_id, source, source_edit_revision, restored_from_checkpoint_id, content,
             non_whitespace_char_count, created_at_ms
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
+            checkpoint_id.as_str(),
             chapter_id.as_str(),
-            new_revision,
-            content,
             source.as_str(),
-            restored_from_revision,
-            char_count,
+            to_sql_i64(source_edit_revision, "source_edit_revision")?,
+            restored_from_checkpoint_id.map(CheckpointId::as_str),
+            content,
+            to_sql_i64(char_count, "non_whitespace_char_count")?,
             now
         ],
     )?;
+
+    Ok(ChapterCheckpoint {
+        id: checkpoint_id,
+        chapter_id: chapter_id.clone(),
+        source: source.clone(),
+        source_edit_revision,
+        restored_from_checkpoint_id: restored_from_checkpoint_id.cloned(),
+        content: content.to_owned(),
+        non_whitespace_char_count: char_count,
+        created_at_ms: now,
+    })
+}
+
+type StoredCheckpoint = (
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    String,
+    i64,
+    i64,
+);
+
+fn load_checkpoint(
+    connection: &Connection,
+    checkpoint_id: &CheckpointId,
+) -> Result<Option<ChapterCheckpoint>> {
+    let stored = connection
+        .query_row(
+            "SELECT id, chapter_id, source, source_edit_revision,
+                    restored_from_checkpoint_id, content,
+                    non_whitespace_char_count, created_at_ms
+             FROM chapter_checkpoints
+             WHERE id = ?1",
+            [checkpoint_id.as_str()],
+            stored_checkpoint_from_row,
+        )
+        .optional()?;
+    stored.map(checkpoint_from_stored).transpose()
+}
+
+fn load_checkpoint_for_chapter(
+    connection: &Connection,
+    checkpoint_id: &CheckpointId,
+    chapter_id: &ChapterId,
+) -> Result<Option<ChapterCheckpoint>> {
+    let stored = connection
+        .query_row(
+            "SELECT id, chapter_id, source, source_edit_revision,
+                    restored_from_checkpoint_id, content,
+                    non_whitespace_char_count, created_at_ms
+             FROM chapter_checkpoints
+             WHERE id = ?1 AND chapter_id = ?2",
+            params![checkpoint_id.as_str(), chapter_id.as_str()],
+            stored_checkpoint_from_row,
+        )
+        .optional()?;
+    stored.map(checkpoint_from_stored).transpose()
+}
+
+fn load_latest_checkpoint(
+    connection: &Connection,
+    chapter_id: &ChapterId,
+) -> Result<Option<ChapterCheckpoint>> {
+    let stored = connection
+        .query_row(
+            "SELECT id, chapter_id, source, source_edit_revision,
+                    restored_from_checkpoint_id, content,
+                    non_whitespace_char_count, created_at_ms
+             FROM chapter_checkpoints
+             WHERE chapter_id = ?1
+             ORDER BY created_at_ms DESC, id DESC
+             LIMIT 1",
+            [chapter_id.as_str()],
+            stored_checkpoint_from_row,
+        )
+        .optional()?;
+    stored.map(checkpoint_from_stored).transpose()
+}
+
+fn stored_checkpoint_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredCheckpoint> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+    ))
+}
+
+fn checkpoint_from_stored(
+    (
+        id,
+        chapter_id,
+        source,
+        source_edit_revision,
+        restored_from_checkpoint_id,
+        content,
+        char_count,
+        created_at_ms,
+    ): StoredCheckpoint,
+) -> Result<ChapterCheckpoint> {
+    Ok(ChapterCheckpoint {
+        id: CheckpointId::from_stored(id),
+        chapter_id: ChapterId::from_stored(chapter_id),
+        source: parse_checkpoint_source(&source)?,
+        source_edit_revision: from_sql_i64(source_edit_revision, "source_edit_revision")?,
+        restored_from_checkpoint_id: restored_from_checkpoint_id.map(CheckpointId::from_stored),
+        content,
+        non_whitespace_char_count: from_sql_i64(char_count, "non_whitespace_char_count")?,
+        created_at_ms,
+    })
+}
+
+fn update_chapter_after_draft(
+    transaction: &Transaction<'_>,
+    chapter_id: &ChapterId,
+    char_count: u64,
+    now: i64,
+) -> Result<()> {
     transaction.execute(
         "UPDATE chapters
-         SET current_revision = ?2,
-             non_whitespace_char_count = ?3,
+         SET non_whitespace_char_count = ?2,
              status = CASE WHEN status = 'planning' THEN 'drafting' ELSE status END,
-             updated_at_ms = ?4
+             updated_at_ms = ?3
          WHERE id = ?1",
-        params![chapter_id.as_str(), new_revision, char_count, now],
+        params![
+            chapter_id.as_str(),
+            to_sql_i64(char_count, "non_whitespace_char_count")?,
+            now
+        ],
     )?;
     touch_project(transaction, now)?;
     Ok(())
@@ -444,12 +708,11 @@ fn load_project(connection: &Connection) -> Result<Option<Project>> {
 fn load_chapter(connection: &Connection, chapter_id: &ChapterId) -> Result<Option<Chapter>> {
     let stored = connection
         .query_row(
-            "SELECT c.id, c.volume_id, c.title, c.status, c.position, r.content,
-                    c.current_revision, c.non_whitespace_char_count,
+            "SELECT c.id, c.volume_id, c.title, c.status, c.position, d.content,
+                    d.edit_revision, c.non_whitespace_char_count,
                     c.created_at_ms, c.updated_at_ms
              FROM chapters c
-             JOIN chapter_revisions r
-               ON r.chapter_id = c.id AND r.revision = c.current_revision
+             JOIN chapter_drafts d ON d.chapter_id = c.id
              WHERE c.id = ?1",
             [chapter_id.as_str()],
             |row| {
@@ -490,7 +753,7 @@ fn load_chapter(connection: &Connection, chapter_id: &ChapterId) -> Result<Optio
                     status: parse_chapter_status(&status)?,
                     position,
                     content,
-                    current_revision: from_sql_i64(revision, "current_revision")?,
+                    edit_revision: from_sql_i64(revision, "edit_revision")?,
                     non_whitespace_char_count: from_sql_i64(
                         char_count,
                         "non_whitespace_char_count",
@@ -607,8 +870,8 @@ fn parse_chapter_status(value: &str) -> Result<ChapterStatus> {
     ChapterStatus::from_str(value).map_err(BackendError::CorruptData)
 }
 
-fn parse_save_source(value: &str) -> Result<SaveSource> {
-    SaveSource::from_str(value).map_err(BackendError::CorruptData)
+fn parse_checkpoint_source(value: &str) -> Result<CheckpointSource> {
+    CheckpointSource::from_str(value).map_err(BackendError::CorruptData)
 }
 
 fn count_non_whitespace(content: &str) -> u64 {

@@ -17,6 +17,7 @@ interface WorkspaceProps {
   api: NovelApi;
   initialWorkspace: WorkspaceDto;
   autosaveDelayMs?: number;
+  nativeCloseRequest?: number;
   onClosed?(): void;
 }
 
@@ -63,6 +64,7 @@ export function Workspace({
   api,
   initialWorkspace,
   autosaveDelayMs = 800,
+  nativeCloseRequest = 0,
   onClosed,
 }: WorkspaceProps) {
   const [workspace, setWorkspace] = useState(initialWorkspace);
@@ -75,6 +77,7 @@ export function Workspace({
     "idle",
   );
   const [emptyCloseError, setEmptyCloseError] = useState("");
+  const handledEmptyNativeCloseRef = useRef(0);
   const initialChapterId = useMemo(
     () =>
       initialWorkspace.lastOpenedChapterId ??
@@ -88,6 +91,7 @@ export function Workspace({
       setLoadError("");
       try {
         const loaded = await api.getChapter(chapterId);
+        await api.setLastOpenedChapter(loaded.id);
         setChapter(loaded);
         setWorkspace((current) => ({
           ...current,
@@ -139,11 +143,7 @@ export function Workspace({
   );
 
   const createChapter = useCallback(
-    async (title: string) => {
-      const volumeId =
-        chapter !== null
-          ? chapter.volumeId
-          : (workspace.outline.volumes[0]?.id ?? null);
+    async (volumeId: string | null, title: string) => {
       const created = await api.createChapter(volumeId, title);
       const summary = chapterSummary(created);
       setWorkspace((current) => ({
@@ -167,12 +167,13 @@ export function Workspace({
               },
       }));
       if (chapter === null) {
+        await api.setLastOpenedChapter(created.id);
         setChapter(created);
         setLoadState("ready");
       }
       return created;
     },
-    [api, chapter, workspace.outline.volumes],
+    [api, chapter],
   );
 
   const closeEmptyProject = useCallback(async () => {
@@ -191,6 +192,28 @@ export function Workspace({
       setEmptyCloseState("idle");
     }
   }, [api, emptyCloseState, onClosed]);
+
+  useEffect(() => {
+    if (
+      nativeCloseRequest === 0 ||
+      nativeCloseRequest <= handledEmptyNativeCloseRef.current ||
+      chapter !== null ||
+      loadState === "loading"
+    ) {
+      return;
+    }
+    handledEmptyNativeCloseRef.current = nativeCloseRequest;
+    setEmptyCloseState("closing");
+    setEmptyCloseError("");
+    void api
+      .completeWindowClose()
+      .catch((error: unknown) => {
+        setEmptyCloseError(
+          safeCommandMessage(error, "窗口暂时无法安全关闭，请重试。"),
+        );
+        setEmptyCloseState("idle");
+      });
+  }, [api, chapter, loadState, nativeCloseRequest]);
 
   if (loadState === "loading") {
     return (
@@ -248,10 +271,11 @@ export function Workspace({
         <OutlinePane
           outline={workspace.outline}
           activeChapterId={null}
+          activeVolumeId={workspace.outline.volumes[0]?.id ?? null}
           onSelectChapter={(chapterId) => void loadChapter(chapterId)}
           onCreateVolume={createVolume}
-          onCreateChapter={async (title) => {
-            await createChapter(title);
+          onCreateChapter={async (volumeId, title) => {
+            await createChapter(volumeId, title);
           }}
         />
         <section className="empty-editor">
@@ -275,6 +299,7 @@ export function Workspace({
       workspace={workspace}
       chapter={chapter}
       autosaveDelayMs={autosaveDelayMs}
+      nativeCloseRequest={nativeCloseRequest}
       onChapterChanged={setChapter}
       onSummaryChanged={updateSummary}
       onCreateVolume={createVolume}
@@ -289,10 +314,11 @@ interface WorkspaceBodyProps {
   workspace: WorkspaceDto;
   chapter: ChapterDto;
   autosaveDelayMs: number;
+  nativeCloseRequest: number;
   onChapterChanged(chapter: ChapterDto): void;
   onSummaryChanged(chapterId: string, patch: Partial<ChapterSummaryDto>): void;
   onCreateVolume(title: string): Promise<void>;
-  onCreateChapter(title: string): Promise<ChapterDto>;
+  onCreateChapter(volumeId: string | null, title: string): Promise<ChapterDto>;
   onClosed?(): void;
 }
 
@@ -301,6 +327,7 @@ function WorkspaceBody({
   workspace,
   chapter,
   autosaveDelayMs,
+  nativeCloseRequest,
   onChapterChanged,
   onSummaryChanged,
   onCreateVolume,
@@ -310,6 +337,7 @@ function WorkspaceBody({
   const [isSwitching, setIsSwitching] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [isReloadingDisk, setIsReloadingDisk] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isCheckpointing, setIsCheckpointing] = useState(false);
   const [switchError, setSwitchError] = useState("");
@@ -319,6 +347,8 @@ function WorkspaceBody({
   const checkpointQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const checkpointTailRef = useRef<Promise<unknown> | null>(null);
   const checkpointedContentRef = useRef(chapter.content);
+  const handledNativeCloseRef = useRef(0);
+  const closeInProgressRef = useRef(false);
   const currentContentRef = useRef(chapter.content);
   const lastCheckpointAtRef = useRef(Date.now());
   const [checkpointClock, setCheckpointClock] = useState(0);
@@ -344,7 +374,8 @@ function WorkspaceBody({
     delayMs: autosaveDelayMs,
   });
   currentContentRef.current = draft.content;
-  const transitionLocked = isSwitching || isClosing || isRestoring;
+  const transitionLocked =
+    isSwitching || isClosing || isRestoring || isReloadingDisk;
   const backgroundLocked = transitionLocked || isPreviewOpen;
   const backgroundLockedRef = useRef(backgroundLocked);
   backgroundLockedRef.current = backgroundLocked;
@@ -406,13 +437,20 @@ function WorkspaceBody({
     const timer = setTimeout(() => {
       if (
         !backgroundLockedRef.current &&
+        draft.state !== "conflict" &&
         currentContentRef.current !== checkpointedContentRef.current
       ) {
         void createCheckpoint("periodic").catch(() => undefined);
       }
     }, remaining);
     return () => clearTimeout(timer);
-  }, [backgroundLocked, checkpointClock, createCheckpoint, draft.content]);
+  }, [
+    backgroundLocked,
+    checkpointClock,
+    createCheckpoint,
+    draft.content,
+    draft.state,
+  ]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -424,12 +462,15 @@ function WorkspaceBody({
         if (backgroundLockedRef.current) {
           return;
         }
+        if (draft.state === "conflict") {
+          return;
+        }
         void createCheckpoint("manual").catch(() => undefined);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [createCheckpoint]);
+  }, [createCheckpoint, draft.state]);
 
   const persistBeforeLeaving = () => createCheckpoint("chapter_switch");
 
@@ -443,6 +484,7 @@ function WorkspaceBody({
     try {
       await persistBeforeLeaving();
       const nextChapter = await api.getChapter(chapterId);
+      await api.setLastOpenedChapter(nextChapter.id);
       onChapterChanged(nextChapter);
     } catch (error: unknown) {
       setSwitchError(
@@ -452,7 +494,10 @@ function WorkspaceBody({
     }
   };
 
-  const createAndSelectChapter = async (title: string) => {
+  const createAndSelectChapter = async (
+    volumeId: string | null,
+    title: string,
+  ) => {
     if (isSwitching) {
       return;
     }
@@ -461,7 +506,8 @@ function WorkspaceBody({
     setSwitchError("");
     try {
       await persistBeforeLeaving();
-      const created = await onCreateChapter(title);
+      const created = await onCreateChapter(volumeId, title);
+      await api.setLastOpenedChapter(created.id);
       onChapterChanged(created);
     } catch (error: unknown) {
       setIsSwitching(false);
@@ -469,21 +515,74 @@ function WorkspaceBody({
     }
   };
 
-  const closeProject = async () => {
-    if (isClosing || isSwitching || isRestoring) {
+  const safelyClose = async (nativeWindow: boolean) => {
+    if (
+      closeInProgressRef.current ||
+      isClosing ||
+      isSwitching ||
+      isRestoring ||
+      isPreviewOpen
+    ) {
       return;
     }
+    if (draft.state === "conflict") {
+      setCheckpointError(
+        "正文存在版本冲突，请先重新加载磁盘版本后再关闭。",
+      );
+      return;
+    }
+    closeInProgressRef.current = true;
     setIsClosing(true);
     setCheckpointError("");
     try {
       await createCheckpoint("project_close");
-      await api.closeProject();
-      onClosed?.();
+      if (nativeWindow) {
+        await api.completeWindowClose();
+      } else {
+        await api.closeProject();
+        onClosed?.();
+      }
     } catch (error: unknown) {
       setCheckpointError(
         safeCommandMessage(error, "项目未能安全关闭，当前正文仍然保留。"),
       );
+      closeInProgressRef.current = false;
       setIsClosing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (
+      nativeCloseRequest === 0 ||
+      nativeCloseRequest <= handledNativeCloseRef.current
+    ) {
+      return;
+    }
+    handledNativeCloseRef.current = nativeCloseRequest;
+    void safelyClose(true);
+  }, [nativeCloseRequest]);
+
+  const reloadDiskVersion = async () => {
+    if (draft.state !== "conflict" || transitionLocked) {
+      return;
+    }
+    setIsReloadingDisk(true);
+    setCheckpointError("");
+    try {
+      const loaded = await api.getChapter(chapter.id);
+      draft.replaceDraft(loaded);
+      checkpointedContentRef.current = loaded.content;
+      currentContentRef.current = loaded.content;
+      lastCheckpointAtRef.current = Date.now();
+      setCheckpointClock((current) => current + 1);
+      onSummaryChanged(loaded.id, chapterSummary(loaded));
+      onChapterChanged(loaded);
+    } catch (error: unknown) {
+      setCheckpointError(
+        safeCommandMessage(error, "无法重新加载磁盘版本，本地正文仍然保留。"),
+      );
+    } finally {
+      setIsReloadingDisk(false);
     }
   };
 
@@ -542,7 +641,9 @@ function WorkspaceBody({
           <button
             className="topbar-version-button"
             type="button"
-            disabled={backgroundLocked || isCheckpointing}
+            disabled={
+              backgroundLocked || isCheckpointing || draft.state === "conflict"
+            }
             onClick={() => void createCheckpoint("manual").catch(() => undefined)}
           >
             {isCheckpointing ? "正在创建" : "创建版本"}
@@ -551,7 +652,7 @@ function WorkspaceBody({
             className="topbar-close-button"
             type="button"
             disabled={backgroundLocked}
-            onClick={() => void closeProject()}
+            onClick={() => void safelyClose(false)}
           >
             {isClosing ? "正在关闭" : "关闭项目"}
           </button>
@@ -561,6 +662,7 @@ function WorkspaceBody({
       <OutlinePane
         outline={workspace.outline}
         activeChapterId={chapter.id}
+        activeVolumeId={chapter.volumeId}
         disabled={backgroundLocked}
         onSelectChapter={(chapterId) => void selectChapter(chapterId)}
         onCreateVolume={onCreateVolume}
@@ -581,6 +683,7 @@ function WorkspaceBody({
         }
         onContentChange={draft.setContent}
         onRetry={() => void draft.retry().catch(() => undefined)}
+        onReloadDiskVersion={() => void reloadDiskVersion()}
       />
 
       <aside className="history-pane" aria-label="历史版本">

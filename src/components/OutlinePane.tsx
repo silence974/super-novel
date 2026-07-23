@@ -5,15 +5,17 @@ import type { OutlineDto } from "../contracts";
 interface OutlinePaneProps {
   outline: OutlineDto;
   activeChapterId: string | null;
+  activeVolumeId: string | null;
   disabled?: boolean;
   onSelectChapter(chapterId: string): void;
   onCreateVolume(title: string): Promise<void>;
-  onCreateChapter(title: string): Promise<void>;
+  onCreateChapter(volumeId: string | null, title: string): Promise<void>;
 }
 
 export function OutlinePane({
   outline,
   activeChapterId,
+  activeVolumeId,
   disabled = false,
   onSelectChapter,
   onCreateVolume,
@@ -23,13 +25,18 @@ export function OutlinePane({
     null,
   );
   const [title, setTitle] = useState("");
+  const [chapterVolumeId, setChapterVolumeId] = useState<string | null>(null);
   const [creationError, setCreationError] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const isEmpty =
     outline.volumes.length === 0 && outline.ungroupedChapters.length === 0;
 
-  const startCreating = (kind: "volume" | "chapter") => {
+  const startCreating = (
+    kind: "volume" | "chapter",
+    volumeId: string | null = activeVolumeId,
+  ) => {
     setCreationKind(kind);
+    setChapterVolumeId(kind === "chapter" ? volumeId : null);
     setTitle("");
     setCreationError("");
   };
@@ -46,7 +53,7 @@ export function OutlinePane({
       if (creationKind === "volume") {
         await onCreateVolume(normalizedTitle);
       } else {
-        await onCreateChapter(normalizedTitle);
+        await onCreateChapter(chapterVolumeId, normalizedTitle);
       }
       setCreationKind(null);
       setTitle("");
@@ -68,7 +75,7 @@ export function OutlinePane({
           <button
             type="button"
             disabled={disabled || isCreating}
-            onClick={() => startCreating("volume")}
+            onClick={() => startCreating("volume", null)}
           >
             新建卷
           </button>
@@ -131,7 +138,17 @@ export function OutlinePane({
         <div className="outline-tree">
           {outline.volumes.map((volume) => (
             <section className="volume-group" key={volume.id}>
-              <h3>{volume.title}</h3>
+              <div className="volume-heading">
+                <h3>{volume.title}</h3>
+                <button
+                  type="button"
+                  aria-label={`在${volume.title}中新建章节`}
+                  disabled={disabled || isCreating}
+                  onClick={() => startCreating("chapter", volume.id)}
+                >
+                  ＋
+                </button>
+              </div>
               <div className="chapter-list">
                 {volume.chapters.map((chapter) => (
                   <button

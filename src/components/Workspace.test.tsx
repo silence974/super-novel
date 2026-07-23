@@ -84,6 +84,7 @@ test("flushes and checkpoints the current chapter before loading another chapter
         };
       },
     ),
+    setLastOpenedChapter: vi.fn().mockResolvedValue(undefined),
   });
 
   render(<Workspace api={api} initialWorkspace={initial} />);
@@ -102,6 +103,7 @@ test("flushes and checkpoints the current chapter before loading another chapter
     expectedEditRevision: 4,
     source: "chapter_switch",
   });
+  expect(api.setLastOpenedChapter).toHaveBeenLastCalledWith("c2");
   await waitFor(() => {
     expect(screen.getByRole("button", { name: /^雨夜/ })).toHaveTextContent("4 字");
   });
@@ -221,7 +223,77 @@ test("shows retry and conflict guidance without making the editor read-only", as
 
   expect(await screen.findByRole("status")).toHaveTextContent("版本冲突");
   expect(screen.getByText(/复制本地正文/)).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "重新加载磁盘版本" }),
+  ).toBeEnabled();
   expect(editor).not.toHaveAttribute("readonly");
+});
+
+test("discards a conflicted local buffer only after confirmation and reloads disk text", async () => {
+  const user = userEvent.setup();
+  const diskChapter = chapter({
+    content: "磁盘上的新正文",
+    editRevision: 4,
+    nonWhitespaceCharCount: 7,
+  });
+  const api = workspaceApi({
+    getChapter: vi
+      .fn()
+      .mockResolvedValueOnce(chapter())
+      .mockResolvedValueOnce(diskChapter),
+    saveWorkingDraft: vi.fn().mockRejectedValue({
+      code: "revision_conflict",
+      message: "磁盘版本已经更新。",
+      details: {},
+      correlationId: "corr-reload",
+    }),
+  });
+
+  render(<Workspace api={api} initialWorkspace={workspace()} autosaveDelayMs={0} />);
+  const editor = await screen.findByRole("textbox", { name: "雨夜 正文" });
+  await user.type(editor, "未保存的本地文字");
+  expect(await screen.findByRole("status")).toHaveTextContent("版本冲突");
+
+  await user.click(screen.getByRole("button", { name: "重新加载磁盘版本" }));
+  expect(screen.getByText(/会放弃编辑器里的未保存修改/)).toBeVisible();
+  await user.click(
+    screen.getByRole("button", { name: "确认放弃并重新加载" }),
+  );
+
+  expect(await screen.findByRole("status")).toHaveTextContent("已保存");
+  expect(editor).toHaveValue("磁盘上的新正文");
+  expect(api.getChapter).toHaveBeenCalledTimes(2);
+  expect(api.saveWorkingDraft).toHaveBeenCalledTimes(1);
+});
+
+test("blocks project close during a revision conflict without retrying the stale save", async () => {
+  const user = userEvent.setup();
+  const api = workspaceApi({
+    getChapter: vi.fn().mockResolvedValue(chapter()),
+    saveWorkingDraft: vi.fn().mockRejectedValue({
+      code: "revision_conflict",
+      message: "磁盘版本已经更新。",
+      details: {},
+      correlationId: "corr-close-conflict",
+    }),
+    createCheckpoint: vi.fn(),
+    closeProject: vi.fn(),
+  });
+
+  render(<Workspace api={api} initialWorkspace={workspace()} autosaveDelayMs={0} />);
+  await user.type(
+    await screen.findByRole("textbox", { name: "雨夜 正文" }),
+    "冲突的本地文字",
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent("版本冲突");
+  await user.click(screen.getByRole("button", { name: "关闭项目" }));
+
+  expect(
+    await screen.findByText(/请先重新加载磁盘版本后再关闭/),
+  ).toBeVisible();
+  expect(api.saveWorkingDraft).toHaveBeenCalledTimes(1);
+  expect(api.createCheckpoint).not.toHaveBeenCalled();
+  expect(api.closeProject).not.toHaveBeenCalled();
 });
 
 test("updates the active outline summary after autosave succeeds", async () => {
@@ -253,6 +325,7 @@ test("adds a chapter to the active volume from the outline", async () => {
   const api = workspaceApi({
     getChapter: vi.fn().mockResolvedValue(chapter()),
     createChapter: vi.fn().mockResolvedValue(created),
+    setLastOpenedChapter: vi.fn().mockResolvedValue(undefined),
   });
 
   render(<Workspace api={api} initialWorkspace={workspace()} />);
@@ -286,6 +359,39 @@ test("adds a volume to the outline", async () => {
 
   expect(api.createVolume).toHaveBeenCalledWith("第二卷");
   expect(await screen.findByRole("heading", { name: "第二卷" })).toBeVisible();
+});
+
+test("creates the first chapter inside a selected empty volume", async () => {
+  const user = userEvent.setup();
+  const initial = workspace();
+  initial.outline.volumes.push({
+    id: "v2",
+    title: "第二卷",
+    position: 2048,
+    chapters: [],
+  });
+  const created = chapter({
+    id: "c2",
+    title: "新岸",
+    volumeId: "v2",
+  });
+  const api = workspaceApi({
+    getChapter: vi.fn().mockResolvedValue(chapter()),
+    createChapter: vi.fn().mockResolvedValue(created),
+    setLastOpenedChapter: vi.fn().mockResolvedValue(undefined),
+  });
+
+  render(<Workspace api={api} initialWorkspace={initial} />);
+  await screen.findByRole("textbox", { name: "雨夜 正文" });
+  await user.click(
+    screen.getByRole("button", { name: "在第二卷中新建章节" }),
+  );
+  await user.type(screen.getByRole("textbox", { name: "章节标题" }), "新岸");
+  await user.click(screen.getByRole("button", { name: "添加章节" }));
+
+  expect(api.createChapter).toHaveBeenCalledWith("v2", "新岸");
+  expect(api.setLastOpenedChapter).toHaveBeenLastCalledWith("c2");
+  expect(await screen.findByRole("textbox", { name: "新岸 正文" })).toBeVisible();
 });
 
 test("keeps the creation form open and reports safe command failures", async () => {

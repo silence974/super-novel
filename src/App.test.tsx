@@ -1,8 +1,14 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { App } from "./App";
-import { chapter, workspace, workspaceApi } from "./test/fixtures";
+import {
+  chapter,
+  checkpoint,
+  savedDraft,
+  workspace,
+  workspaceApi,
+} from "./test/fixtures";
 
 test("loads the workspace once and shows the start screen when none is open", async () => {
   const api = {
@@ -12,6 +18,8 @@ test("loads the workspace once and shows the start screen when none is open", as
       details: {},
       correlationId: "corr-1",
     }),
+    listenWindowCloseRequested: vi.fn().mockResolvedValue(() => undefined),
+    completeWindowClose: vi.fn(),
   };
 
   render(<App api={api as never} />);
@@ -28,6 +36,8 @@ test("shows the temporary workspace after startup succeeds", async () => {
       outline: { volumes: [], ungroupedChapters: [] },
       lastOpenedChapterId: null,
     }),
+    listenWindowCloseRequested: vi.fn().mockResolvedValue(() => undefined),
+    completeWindowClose: vi.fn(),
   };
 
   render(<App api={api as never} />);
@@ -41,6 +51,8 @@ test("shows the temporary workspace after startup succeeds", async () => {
 test("shows a safe startup error for unexpected failures", async () => {
   const api = {
     getWorkspace: vi.fn().mockRejectedValue(new Error("stack-shaped detail")),
+    listenWindowCloseRequested: vi.fn().mockResolvedValue(() => undefined),
+    completeWindowClose: vi.fn(),
   };
 
   render(<App api={api as never} />);
@@ -66,4 +78,84 @@ test("returns to the start screen after a workspace closes successfully", async 
   );
 
   expect(await screen.findByRole("heading", { name: "开始写作" })).toBeVisible();
+});
+
+test("native window close flushes and checkpoints before completing the close", async () => {
+  const user = userEvent.setup();
+  const events: string[] = [];
+  let requestClose!: () => void;
+  const api = workspaceApi({
+    getWorkspace: vi.fn().mockResolvedValue(workspace()),
+    getChapter: vi.fn().mockResolvedValue(chapter()),
+    listenWindowCloseRequested: vi.fn(async (handler) => {
+      requestClose = handler;
+      return () => undefined;
+    }),
+    saveWorkingDraft: vi.fn(async (input) => {
+      events.push(`save:${input.content}`);
+      return savedDraft(input.content, 1);
+    }),
+    createCheckpoint: vi.fn(async (input) => {
+      events.push(`checkpoint:${input.source}`);
+      return checkpoint("cp-native", input.source);
+    }),
+    completeWindowClose: vi.fn(async () => {
+      events.push("complete-window-close");
+    }),
+    closeProject: vi.fn(),
+  });
+
+  render(<App api={api} />);
+  await user.type(
+    await screen.findByRole("textbox", { name: "雨夜 正文" }),
+    "关闭前正文",
+  );
+  await waitFor(() =>
+    expect(api.listenWindowCloseRequested).toHaveBeenCalledTimes(1),
+  );
+  events.length = 0;
+
+  act(() => requestClose());
+
+  await waitFor(() =>
+    expect(events).toEqual([
+      "save:关闭前正文",
+      "checkpoint:project_close",
+      "complete-window-close",
+    ]),
+  );
+  expect(api.closeProject).not.toHaveBeenCalled();
+});
+
+test("native window close remains blocked and reports an error when checkpointing fails", async () => {
+  const user = userEvent.setup();
+  let requestClose!: () => void;
+  const api = workspaceApi({
+    getWorkspace: vi.fn().mockResolvedValue(workspace()),
+    getChapter: vi.fn().mockResolvedValue(chapter()),
+    listenWindowCloseRequested: vi.fn(async (handler) => {
+      requestClose = handler;
+      return () => undefined;
+    }),
+    saveWorkingDraft: vi.fn(async (input) => savedDraft(input.content, 1)),
+    createCheckpoint: vi.fn().mockRejectedValue({
+      code: "internal_error",
+      message: "关闭版本创建失败。",
+      details: {},
+      correlationId: "corr-native-close",
+    }),
+    completeWindowClose: vi.fn(),
+  });
+
+  render(<App api={api} />);
+  const editor = await screen.findByRole("textbox", { name: "雨夜 正文" });
+  await user.type(editor, "必须留下");
+  await waitFor(() =>
+    expect(api.listenWindowCloseRequested).toHaveBeenCalledTimes(1),
+  );
+  act(() => requestClose());
+
+  expect(await screen.findByText("关闭版本创建失败。")).toBeVisible();
+  expect(editor).toHaveValue("必须留下");
+  expect(api.completeWindowClose).not.toHaveBeenCalled();
 });

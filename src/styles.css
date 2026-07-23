@@ -669,6 +669,13 @@ p {
   margin-top: 1rem;
 }
 
+.volume-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 0.75rem;
+}
+
 .volume-group h3 {
   margin: 0;
   padding: 0.35rem 1rem;
@@ -676,6 +683,28 @@ p {
   font-size: 0.68rem;
   font-weight: 720;
   letter-spacing: 0.05em;
+}
+
+.volume-heading button {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  color: #756e65;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.2rem;
+  cursor: pointer;
+}
+
+.volume-heading button:hover:not(:disabled),
+.volume-heading button:focus-visible {
+  color: var(--accent);
+  border-color: var(--line-strong);
+}
+
+.volume-heading button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .chapter-list {
@@ -886,6 +915,7 @@ p {
 
 .conflict-guidance {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 0.65rem;
   padding: 0.65rem 0;
@@ -893,6 +923,23 @@ p {
   border-top: 1px solid rgba(155, 62, 50, 0.25);
   font-size: 0.69rem;
   line-height: 1.5;
+}
+
+.conflict-guidance > button,
+.conflict-guidance > div button {
+  padding: 0.25rem 0.45rem;
+  color: var(--error);
+  background: transparent;
+  border: 1px solid rgba(155, 62, 50, 0.35);
+  border-radius: 0.2rem;
+  cursor: pointer;
+}
+
+.conflict-guidance > div {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .history-pane {

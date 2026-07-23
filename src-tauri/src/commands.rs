@@ -45,6 +45,23 @@ pub async fn close_project(session: tauri::State<'_, ProjectSession>) -> Result<
 }
 
 #[tauri::command]
+pub async fn set_last_opened_chapter(
+    session: tauri::State<'_, ProjectSession>,
+    chapter_id: ChapterId,
+) -> Result<(), CommandError> {
+    let session = session.inner().clone();
+    run_blocking(move || {
+        session.with_backend(|backend| backend.set_last_opened_chapter(&chapter_id))
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn complete_window_close(window: tauri::Window) -> Result<(), CommandError> {
+    window.destroy().map_err(CommandError::from_join)
+}
+
+#[tauri::command]
 pub async fn get_workspace(
     session: tauri::State<'_, ProjectSession>,
 ) -> Result<Workspace, CommandError> {

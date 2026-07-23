@@ -503,6 +503,25 @@ impl NovelBackend {
         })
     }
 
+    pub fn set_last_opened_chapter(&self, chapter_id: &ChapterId) -> Result<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        if !chapter_exists(&transaction, chapter_id)? {
+            return Err(BackendError::NotFound {
+                resource: "chapter",
+                id: chapter_id.to_string(),
+            });
+        }
+        transaction.execute(
+            "INSERT INTO app_metadata(key, value)
+             VALUES ('last_opened_chapter_id', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [chapter_id.as_str()],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
         self.connection
             .lock()

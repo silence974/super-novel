@@ -1,4 +1,4 @@
-use novel_backend::{BackendError, NovelBackend};
+use novel_backend::{BackendError, CreateChapter, NovelBackend};
 use tempfile::tempdir;
 
 #[test]
@@ -90,6 +90,59 @@ fn workspace_loads_project_outline_and_last_opened_chapter_together() {
     assert!(workspace.outline.volumes.is_empty());
     assert!(workspace.outline.ungrouped_chapters.is_empty());
     assert_eq!(workspace.last_opened_chapter_id, None);
+}
+
+#[test]
+fn last_opened_chapter_survives_reopening_the_project() {
+    let root = tempdir().unwrap();
+    let project_dir = root.path().join("resume-chapter");
+    std::fs::create_dir(&project_dir).unwrap();
+    let backend = NovelBackend::create_project(&project_dir, "续写").unwrap();
+    let chapter = backend
+        .create_chapter(CreateChapter {
+            volume_id: None,
+            title: "第二章".into(),
+        })
+        .unwrap();
+
+    backend.set_last_opened_chapter(&chapter.id).unwrap();
+    drop(backend);
+
+    let reopened = NovelBackend::open_project(&project_dir).unwrap();
+    assert_eq!(
+        reopened.workspace().unwrap().last_opened_chapter_id,
+        Some(chapter.id)
+    );
+}
+
+#[test]
+fn last_opened_chapter_rejects_an_unknown_chapter() {
+    let root = tempdir().unwrap();
+    let project_dir = root.path().join("unknown-chapter");
+    let other_project_dir = root.path().join("other-project");
+    std::fs::create_dir(&project_dir).unwrap();
+    std::fs::create_dir(&other_project_dir).unwrap();
+    let backend = NovelBackend::create_project(&project_dir, "未知章节").unwrap();
+    let other_backend = NovelBackend::create_project(&other_project_dir, "其他项目").unwrap();
+    let other_chapter = other_backend
+        .create_chapter(CreateChapter {
+            volume_id: None,
+            title: "不属于当前项目".into(),
+        })
+        .unwrap();
+
+    let error = backend
+        .set_last_opened_chapter(&other_chapter.id)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        BackendError::NotFound {
+            resource: "chapter",
+            ..
+        }
+    ));
+    assert_eq!(backend.workspace().unwrap().last_opened_chapter_id, None);
 }
 
 #[test]

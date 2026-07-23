@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ChapterDto } from "../contracts";
 import type { SaveState } from "../useDraftAutosave";
 
@@ -19,6 +20,7 @@ interface EditorPaneProps {
   transitionLockMessage?: string;
   onContentChange(content: string): void;
   onRetry(): void;
+  onReloadDiskVersion(): void;
 }
 
 export function EditorPane({
@@ -31,7 +33,10 @@ export function EditorPane({
   transitionLockMessage = "正在安全保存，完成前正文暂时锁定。",
   onContentChange,
   onRetry,
+  onReloadDiskVersion,
 }: EditorPaneProps) {
+  const [isConfirmingReload, setIsConfirmingReload] = useState(false);
+
   return (
     <section className="editor-pane" aria-label="正文编辑器">
       <header className="editor-heading">
@@ -79,6 +84,27 @@ export function EditorPane({
         <div className="conflict-guidance" role="alert">
           <strong>本地正文仍保留在编辑器中。</strong>
           <span>请先复制本地正文，再重新加载磁盘版本后手动处理差异。</span>
+          {isConfirmingReload ? (
+            <div>
+              <span>这会放弃编辑器里的未保存修改。</span>
+              <button type="button" onClick={onReloadDiskVersion}>
+                确认放弃并重新加载
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsConfirmingReload(false)}
+              >
+                取消
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsConfirmingReload(true)}
+            >
+              重新加载磁盘版本
+            </button>
+          )}
         </div>
       ) : null}
     </section>

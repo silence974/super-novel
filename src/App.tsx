@@ -17,6 +17,7 @@ type StartupState =
 
 export function App({ api = tauriApi }: AppProps) {
   const [startup, setStartup] = useState<StartupState>({ kind: "loading" });
+  const [nativeCloseRequest, setNativeCloseRequest] = useState(0);
 
   useEffect(() => {
     let isCurrent = true;
@@ -49,6 +50,42 @@ export function App({ api = tauriApi }: AppProps) {
       isCurrent = false;
     };
   }, [api]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    void api
+      .listenWindowCloseRequested(() => {
+        if (active) {
+          setNativeCloseRequest((current) => current + 1);
+        }
+      })
+      .then((stopListening) => {
+        if (active) {
+          unlisten = stopListening;
+        } else {
+          stopListening();
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [api]);
+
+  useEffect(() => {
+    if (
+      nativeCloseRequest === 0 ||
+      startup.kind === "loading" ||
+      startup.kind === "workspace"
+    ) {
+      return;
+    }
+    void api.completeWindowClose().catch(() => undefined);
+  }, [api, nativeCloseRequest, startup.kind]);
 
   if (startup.kind === "loading") {
     return (
@@ -88,6 +125,7 @@ export function App({ api = tauriApi }: AppProps) {
     <Workspace
       api={api}
       initialWorkspace={startup.workspace}
+      nativeCloseRequest={nativeCloseRequest}
       onClosed={() => setStartup({ kind: "start" })}
     />
   );

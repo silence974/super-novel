@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   ChapterDto,
@@ -17,6 +18,9 @@ export interface NovelApi {
   createProject(directory: string, name: string): Promise<WorkspaceDto>;
   openProject(directory: string): Promise<WorkspaceDto>;
   closeProject(): Promise<void>;
+  setLastOpenedChapter(chapterId: string): Promise<void>;
+  listenWindowCloseRequested(handler: () => void): Promise<() => void>;
+  completeWindowClose(): Promise<void>;
   getWorkspace(): Promise<WorkspaceDto>;
   createVolume(title: string): Promise<VolumeDto>;
   createChapter(volumeId: string | null, title: string): Promise<ChapterDto>;
@@ -69,6 +73,18 @@ export const tauriApi: NovelApi = {
 
   closeProject() {
     return invoke<void>("close_project");
+  },
+
+  setLastOpenedChapter(chapterId) {
+    return invoke<void>("set_last_opened_chapter", { chapterId });
+  },
+
+  listenWindowCloseRequested(handler) {
+    return listen("desktop-close-requested", handler);
+  },
+
+  completeWindowClose() {
+    return invoke<void>("complete_window_close");
   },
 
   getWorkspace() {

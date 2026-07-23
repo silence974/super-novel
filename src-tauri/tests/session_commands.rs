@@ -41,6 +41,26 @@ fn unopened_projects_use_the_stable_not_found_error_contract() {
 }
 
 #[test]
+fn adapter_normalizes_validation_integrity_and_internal_errors() {
+    let validation = CommandError::from(BackendError::Validation(
+        "secret project path D:\\private\\novel".into(),
+    ));
+    let integrity = CommandError::from(BackendError::CorruptData(
+        "SELECT * FROM private_table".into(),
+    ));
+    let internal = CommandError::from_join("worker exposed D:\\private\\novel");
+
+    assert_eq!(validation.code, "validation_error");
+    assert_eq!(integrity.code, "integrity_error");
+    assert_eq!(internal.code, "internal_error");
+    for error in [validation, integrity, internal] {
+        assert!(!error.message.contains("D:\\private"));
+        assert!(!error.message.contains("SELECT"));
+        assert_eq!(error.details, serde_json::json!({}));
+    }
+}
+
+#[test]
 fn desktop_session_runs_the_complete_writing_flow() {
     let root = tempdir().unwrap();
     let directory = root.path().join("novel");

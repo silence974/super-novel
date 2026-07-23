@@ -15,7 +15,7 @@ pub struct CommandError {
 impl CommandError {
     pub fn from_join<E>(_error: E) -> Self {
         Self::new(
-            "operation_failed",
+            "internal_error",
             "The desktop operation could not be completed.",
             json!({}),
         )
@@ -34,10 +34,10 @@ impl CommandError {
 impl From<BackendError> for CommandError {
     fn from(error: BackendError) -> Self {
         match error {
-            BackendError::Validation(reason) => Self::new(
-                "validation",
+            BackendError::Validation(_) => Self::new(
+                "validation_error",
                 "The request contains invalid data.",
-                json!({ "reason": reason }),
+                json!({}),
             ),
             BackendError::NotFound { resource, id } => Self::new(
                 "not_found",
@@ -45,7 +45,7 @@ impl From<BackendError> for CommandError {
                 json!({ "resource": resource, "id": id }),
             ),
             BackendError::AlreadyInitialized => Self::new(
-                "already_initialized",
+                "validation_error",
                 "The project is already initialized.",
                 json!({}),
             ),
@@ -67,10 +67,10 @@ impl From<BackendError> for CommandError {
                 "Another project is already open.",
                 json!({}),
             ),
-            BackendError::CleanupFailed { target } => Self::new(
-                "cleanup_failed",
-                "Project creation cleanup could not be completed.",
-                json!({ "target": target }),
+            BackendError::CleanupFailed { .. } => Self::new(
+                "internal_error",
+                "The desktop operation could not be completed.",
+                json!({}),
             ),
             BackendError::RevisionConflict { expected, current } => Self::new(
                 "revision_conflict",
@@ -81,25 +81,27 @@ impl From<BackendError> for CommandError {
                 }),
             ),
             BackendError::CorruptData(_) => Self::new(
-                "corrupt_data",
+                "integrity_error",
                 "The project contains invalid data.",
                 json!({}),
             ),
             BackendError::Database(_) => Self::new(
-                "database_error",
+                "internal_error",
                 "The project database operation failed.",
                 json!({}),
             ),
-            BackendError::Io(_) => {
-                Self::new("file_error", "A project file operation failed.", json!({}))
-            }
+            BackendError::Io(_) => Self::new(
+                "internal_error",
+                "A project file operation failed.",
+                json!({}),
+            ),
             BackendError::Manifest(_) => Self::new(
-                "manifest_error",
+                "internal_error",
                 "The project manifest could not be written.",
                 json!({}),
             ),
             BackendError::LockPoisoned => Self::new(
-                "backend_unavailable",
+                "internal_error",
                 "The project backend is unavailable.",
                 json!({}),
             ),

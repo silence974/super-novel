@@ -145,6 +145,7 @@ impl NovelBackend {
         let connection = Connection::open(database_path)?;
         configure_connection(&connection)?;
         verify_quick_check(&connection)?;
+        verify_foreign_keys(&connection)?;
         let (database_project_id, schema_version) = load_project_identity(&connection)?;
         if schema_version != SCHEMA_VERSION {
             return Err(BackendError::MigrationRequired {
@@ -672,14 +673,25 @@ fn verify_quick_check(connection: &Connection) -> Result<()> {
         if result == "ok" {
             saw_ok = true;
         } else {
-            return Err(BackendError::InvalidProject(
+            return Err(BackendError::CorruptData(
                 "project database failed its integrity check".into(),
             ));
         }
     }
     if !saw_ok {
-        return Err(BackendError::InvalidProject(
+        return Err(BackendError::CorruptData(
             "project database integrity check returned no result".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_foreign_keys(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare("PRAGMA foreign_key_check")?;
+    let mut rows = statement.query([])?;
+    if rows.next()?.is_some() {
+        return Err(BackendError::CorruptData(
+            "project database failed its foreign key check".into(),
         ));
     }
     Ok(())

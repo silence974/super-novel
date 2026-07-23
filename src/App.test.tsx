@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { App } from "./App";
+import { chapter, workspace, workspaceApi } from "./test/fixtures";
 
 test("loads the workspace once and shows the start screen when none is open", async () => {
   const api = {
@@ -47,4 +49,21 @@ test("shows a safe startup error for unexpected failures", async () => {
     "无法读取当前项目，请重试。",
   );
   expect(screen.getByRole("alert")).not.toHaveTextContent("stack-shaped detail");
+});
+
+test("returns to the start screen after a workspace closes successfully", async () => {
+  const user = userEvent.setup();
+  const api = workspaceApi({
+    getWorkspace: vi.fn().mockResolvedValue(workspace()),
+    getChapter: vi.fn().mockResolvedValue(chapter()),
+    closeProject: vi.fn().mockResolvedValue(undefined),
+  });
+
+  render(<App api={api} />);
+
+  await user.click(
+    await screen.findByRole("button", { name: "关闭项目" }),
+  );
+
+  expect(await screen.findByRole("heading", { name: "开始写作" })).toBeVisible();
 });

@@ -84,5 +84,11 @@ export function App({ api = tauriApi }: AppProps) {
     );
   }
 
-  return <Workspace api={api} initialWorkspace={startup.workspace} />;
+  return (
+    <Workspace
+      api={api}
+      initialWorkspace={startup.workspace}
+      onClosed={() => setStartup({ kind: "start" })}
+    />
+  );
 }

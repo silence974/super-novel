@@ -198,4 +198,77 @@ describe("useDraftAutosave", () => {
     expect(save).not.toHaveBeenCalled();
     expect(result.current.state).toBe("saved");
   });
+
+  test("replaces the current draft atomically and ignores an older save response", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<SavedDraftDto>();
+    const save = vi.fn().mockReturnValue(pending.promise);
+    const { result } = renderHook(() =>
+      useDraftAutosave({ chapter: chapter(), save, delayMs: 0 }),
+    );
+
+    act(() => result.current.setContent("恢复前的本地正文"));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+
+    act(() => {
+      result.current.replaceDraft(
+        chapter({
+          content: "已恢复的历史正文",
+          editRevision: 9,
+          nonWhitespaceCharCount: 8,
+          updatedAtMs: 90,
+        }),
+      );
+    });
+
+    await act(async () =>
+      pending.resolve(savedDraft("恢复前的本地正文", 1)),
+    );
+
+    expect(result.current.content).toBe("已恢复的历史正文");
+    expect(result.current.editRevision).toBe(9);
+    expect(result.current.nonWhitespaceCharCount).toBe(8);
+    expect(result.current.state).toBe("saved");
+    expect(result.current.error).toBeNull();
+  });
+
+  test("keeps replacement edits single-flight until the older save settles", async () => {
+    vi.useFakeTimers();
+    const older = deferred<SavedDraftDto>();
+    const newer = deferred<SavedDraftDto>();
+    const save = vi
+      .fn()
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+    const { result } = renderHook(() =>
+      useDraftAutosave({ chapter: chapter(), save, delayMs: 0 }),
+    );
+
+    act(() => result.current.setContent("旧请求正文"));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    act(() => {
+      result.current.replaceDraft(
+        chapter({ content: "恢复正文", editRevision: 9, updatedAtMs: 90 }),
+      );
+      result.current.setContent("恢复后继续写");
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await act(async () => older.resolve(savedDraft("旧请求正文", 1)));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith({
+      chapterId: "c1",
+      expectedEditRevision: 9,
+      content: "恢复后继续写",
+    });
+
+    await act(async () =>
+      newer.resolve(savedDraft("恢复后继续写", 10)),
+    );
+    expect(result.current.state).toBe("saved");
+  });
 });

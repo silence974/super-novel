@@ -44,6 +44,7 @@ export function useDraftAutosave({
   const updatedAtRef = useRef(chapter.updatedAtMs);
   const savedContentRef = useRef(chapter.content);
   const generationRef = useRef(0);
+  const operationEpochRef = useRef(0);
   const stateRef = useRef<SaveState>("saved");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef<Promise<DraftSnapshot> | null>(null);
@@ -108,6 +109,7 @@ export function useDraftAutosave({
     }
 
     const capturedGeneration = generationRef.current;
+    const capturedEpoch = operationEpochRef.current;
     const capturedContent = currentContent;
     updateState("saving");
     if (mountedRef.current) {
@@ -120,6 +122,16 @@ export function useDraftAutosave({
       content: capturedContent,
     })
       .then((saved) => {
+        if (capturedEpoch !== operationEpochRef.current) {
+          return {
+            chapterId: saved.chapterId,
+            content: capturedContent,
+            editRevision: saved.editRevision,
+            nonWhitespaceCharCount: saved.nonWhitespaceCharCount,
+            updatedAtMs: saved.updatedAtMs,
+          };
+        }
+
         revisionRef.current = saved.editRevision;
         updatedAtRef.current = saved.updatedAtMs;
         savedContentRef.current = capturedContent;
@@ -145,6 +157,9 @@ export function useDraftAutosave({
         };
       })
       .catch((saveError: unknown) => {
+        if (capturedEpoch !== operationEpochRef.current) {
+          throw saveError;
+        }
         if (mountedRef.current) {
           setError(saveError);
         }
@@ -154,7 +169,12 @@ export function useDraftAutosave({
         throw saveError;
       })
       .finally(() => {
-        inFlightRef.current = null;
+        if (inFlightRef.current === request) {
+          inFlightRef.current = null;
+          if (mountedRef.current && stateRef.current === "dirty") {
+            schedule(0);
+          }
+        }
       });
 
     inFlightRef.current = request;
@@ -225,6 +245,24 @@ export function useDraftAutosave({
     }
   }, []);
 
+  const replaceDraft = useCallback(
+    (nextChapter: ChapterDto) => {
+      clearTimer();
+      operationEpochRef.current += 1;
+      chapterRef.current = nextChapter;
+      contentRef.current = nextChapter.content;
+      revisionRef.current = nextChapter.editRevision;
+      updatedAtRef.current = nextChapter.updatedAtMs;
+      savedContentRef.current = nextChapter.content;
+      generationRef.current = 0;
+      setContentState(nextChapter.content);
+      setEditRevision(nextChapter.editRevision);
+      setError(null);
+      updateState("saved");
+    },
+    [clearTimer, updateState],
+  );
+
   return {
     content,
     editRevision,
@@ -234,5 +272,6 @@ export function useDraftAutosave({
     setContent,
     flush,
     retry,
+    replaceDraft,
   };
 }

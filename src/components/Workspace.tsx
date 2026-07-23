@@ -1,20 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { NovelApi } from "../api";
 import { safeCommandMessage } from "../api";
 import type {
   ChapterDto,
   ChapterSummaryDto,
+  CheckpointSource,
   OutlineDto,
   WorkspaceDto,
 } from "../contracts";
 import { useDraftAutosave } from "../useDraftAutosave";
 import { EditorPane } from "./EditorPane";
+import { HistoryPane } from "./HistoryPane";
 import { OutlinePane } from "./OutlinePane";
 
 interface WorkspaceProps {
   api: NovelApi;
   initialWorkspace: WorkspaceDto;
   autosaveDelayMs?: number;
+  onClosed?(): void;
 }
 
 function firstChapterId(outline: OutlineDto): string | null {
@@ -60,6 +63,7 @@ export function Workspace({
   api,
   initialWorkspace,
   autosaveDelayMs = 800,
+  onClosed,
 }: WorkspaceProps) {
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [chapter, setChapter] = useState<ChapterDto | null>(null);
@@ -67,6 +71,10 @@ export function Workspace({
     "loading",
   );
   const [loadError, setLoadError] = useState("");
+  const [emptyCloseState, setEmptyCloseState] = useState<"idle" | "closing">(
+    "idle",
+  );
+  const [emptyCloseError, setEmptyCloseError] = useState("");
   const initialChapterId = useMemo(
     () =>
       initialWorkspace.lastOpenedChapterId ??
@@ -167,6 +175,23 @@ export function Workspace({
     [api, chapter, workspace.outline.volumes],
   );
 
+  const closeEmptyProject = useCallback(async () => {
+    if (emptyCloseState === "closing") {
+      return;
+    }
+    setEmptyCloseState("closing");
+    setEmptyCloseError("");
+    try {
+      await api.closeProject();
+      onClosed?.();
+    } catch (error: unknown) {
+      setEmptyCloseError(
+        safeCommandMessage(error, "项目暂时无法关闭，请重试。"),
+      );
+      setEmptyCloseState("idle");
+    }
+  }, [api, emptyCloseState, onClosed]);
+
   if (loadState === "loading") {
     return (
       <main className="workspace-shell workspace-loading" aria-label="写作工作台">
@@ -206,8 +231,19 @@ export function Workspace({
     return (
       <main className="workspace-shell empty-workspace" aria-label="写作工作台">
         <header className="workspace-topbar">
-          <span className="workspace-wordmark">SUPER NOVEL</span>
-          <span>{workspace.project.name}</span>
+          <div className="workspace-identity">
+            <span className="workspace-wordmark">SUPER NOVEL</span>
+            <span className="topbar-divider" aria-hidden="true" />
+            <strong>{workspace.project.name}</strong>
+          </div>
+          <button
+            className="topbar-close-button"
+            type="button"
+            disabled={emptyCloseState === "closing"}
+            onClick={() => void closeEmptyProject()}
+          >
+            {emptyCloseState === "closing" ? "正在关闭" : "关闭项目"}
+          </button>
         </header>
         <OutlinePane
           outline={workspace.outline}
@@ -223,6 +259,11 @@ export function Workspace({
           <h1>从第一章开始</h1>
           <p>创建章节后即可进入纯文本写作空间。</p>
         </section>
+        {emptyCloseError ? (
+          <div className="workspace-error" role="alert">
+            {emptyCloseError}
+          </div>
+        ) : null}
       </main>
     );
   }
@@ -238,6 +279,7 @@ export function Workspace({
       onSummaryChanged={updateSummary}
       onCreateVolume={createVolume}
       onCreateChapter={createChapter}
+      onClosed={onClosed}
     />
   );
 }
@@ -251,6 +293,7 @@ interface WorkspaceBodyProps {
   onSummaryChanged(chapterId: string, patch: Partial<ChapterSummaryDto>): void;
   onCreateVolume(title: string): Promise<void>;
   onCreateChapter(title: string): Promise<ChapterDto>;
+  onClosed?(): void;
 }
 
 function WorkspaceBody({
@@ -262,10 +305,22 @@ function WorkspaceBody({
   onSummaryChanged,
   onCreateVolume,
   onCreateChapter,
+  onClosed,
 }: WorkspaceBodyProps) {
   const [isSwitching, setIsSwitching] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [isCheckpointing, setIsCheckpointing] = useState(false);
   const [switchError, setSwitchError] = useState("");
+  const [checkpointError, setCheckpointError] = useState("");
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
+  const checkpointQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const checkpointTailRef = useRef<Promise<unknown> | null>(null);
+  const checkpointedContentRef = useRef(chapter.content);
+  const currentContentRef = useRef(chapter.content);
+  const lastCheckpointAtRef = useRef(Date.now());
+  const [checkpointClock, setCheckpointClock] = useState(0);
   const onDraftSaved = useCallback(
     (saved: {
       chapterId: string;
@@ -287,24 +342,94 @@ function WorkspaceBody({
     onSaved: onDraftSaved,
     delayMs: autosaveDelayMs,
   });
+  currentContentRef.current = draft.content;
+  const transitionLocked = isSwitching || isClosing || isRestoring;
+  const transitionLockedRef = useRef(transitionLocked);
+  transitionLockedRef.current = transitionLocked;
 
   const activeVolume = workspace.outline.volumes.find((volume) =>
     volume.chapters.some((item) => item.id === chapter.id),
   );
 
-  const persistBeforeLeaving = async () => {
-    const saved = await draft.flush();
-    onSummaryChanged(chapter.id, {
-      editRevision: saved.editRevision,
-      nonWhitespaceCharCount: saved.nonWhitespaceCharCount,
-      updatedAtMs: saved.updatedAtMs,
-    });
-    await api.createCheckpoint({
-      chapterId: chapter.id,
-      expectedEditRevision: saved.editRevision,
-      source: "chapter_switch",
-    });
-  };
+  const createCheckpoint = useCallback(
+    (source: CheckpointSource) => {
+      setIsCheckpointing(true);
+      setCheckpointError("");
+
+      const operation = checkpointQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const saved = await draft.flush();
+          onSummaryChanged(chapter.id, {
+            editRevision: saved.editRevision,
+            nonWhitespaceCharCount: saved.nonWhitespaceCharCount,
+            updatedAtMs: saved.updatedAtMs,
+          });
+          const created = await api.createCheckpoint({
+            chapterId: chapter.id,
+            expectedEditRevision: saved.editRevision,
+            source,
+          });
+          checkpointedContentRef.current = saved.content;
+          lastCheckpointAtRef.current = Date.now();
+          setCheckpointClock((current) => current + 1);
+          setHistoryRefreshToken((current) => current + 1);
+          return created;
+        });
+
+      checkpointQueueRef.current = operation;
+      checkpointTailRef.current = operation;
+      void operation
+        .catch((error: unknown) => {
+          setCheckpointError(
+            safeCommandMessage(error, "无法创建历史版本，正文仍保留在编辑器中。"),
+          );
+        })
+        .finally(() => {
+          if (checkpointTailRef.current === operation) {
+            checkpointTailRef.current = null;
+            setIsCheckpointing(false);
+          }
+        });
+      return operation;
+    },
+    [api, chapter.id, draft.flush, onSummaryChanged],
+  );
+
+  useEffect(() => {
+    const remaining = Math.max(
+      0,
+      lastCheckpointAtRef.current + 300_000 - Date.now(),
+    );
+    const timer = setTimeout(() => {
+      if (
+        !transitionLockedRef.current &&
+        currentContentRef.current !== checkpointedContentRef.current
+      ) {
+        void createCheckpoint("periodic").catch(() => undefined);
+      }
+    }, remaining);
+    return () => clearTimeout(timer);
+  }, [checkpointClock, createCheckpoint, draft.content, transitionLocked]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() === "s" &&
+        (event.ctrlKey || event.metaKey)
+      ) {
+        event.preventDefault();
+        if (transitionLockedRef.current) {
+          return;
+        }
+        void createCheckpoint("manual").catch(() => undefined);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [createCheckpoint]);
+
+  const persistBeforeLeaving = () => createCheckpoint("chapter_switch");
 
   const selectChapter = async (chapterId: string) => {
     if (chapterId === chapter.id || isSwitching) {
@@ -342,6 +467,42 @@ function WorkspaceBody({
     }
   };
 
+  const closeProject = async () => {
+    if (isClosing || isSwitching || isRestoring) {
+      return;
+    }
+    setIsClosing(true);
+    setCheckpointError("");
+    try {
+      await createCheckpoint("project_close");
+      await api.closeProject();
+      onClosed?.();
+    } catch (error: unknown) {
+      setCheckpointError(
+        safeCommandMessage(error, "项目未能安全关闭，当前正文仍然保留。"),
+      );
+      setIsClosing(false);
+    }
+  };
+
+  const restoredChapter = (restored: ChapterDto) => {
+    draft.replaceDraft(restored);
+    checkpointedContentRef.current = restored.content;
+    currentContentRef.current = restored.content;
+    lastCheckpointAtRef.current = Date.now();
+    setCheckpointClock((current) => current + 1);
+    setCheckpointError("");
+    onSummaryChanged(restored.id, chapterSummary(restored));
+    onChapterChanged(restored);
+  };
+
+  const flushBeforeRestore = async () => {
+    setIsRestoring(true);
+    setCheckpointError("");
+    await checkpointQueueRef.current.catch(() => undefined);
+    return draft.flush();
+  };
+
   return (
     <main
       className={
@@ -373,10 +534,18 @@ function WorkspaceBody({
           <button
             className="topbar-version-button"
             type="button"
-            disabled
-            title="历史版本功能将在下一阶段启用"
+            disabled={isClosing || isSwitching || isRestoring || isCheckpointing}
+            onClick={() => void createCheckpoint("manual").catch(() => undefined)}
           >
-            创建版本
+            {isCheckpointing ? "正在创建" : "创建版本"}
+          </button>
+          <button
+            className="topbar-close-button"
+            type="button"
+            disabled={isClosing || isSwitching || isRestoring}
+            onClick={() => void closeProject()}
+          >
+            {isClosing ? "正在关闭" : "关闭项目"}
           </button>
         </div>
       </header>
@@ -384,7 +553,7 @@ function WorkspaceBody({
       <OutlinePane
         outline={workspace.outline}
         activeChapterId={chapter.id}
-        disabled={isSwitching}
+        disabled={transitionLocked}
         onSelectChapter={(chapterId) => void selectChapter(chapterId)}
         onCreateVolume={onCreateVolume}
         onCreateChapter={createAndSelectChapter}
@@ -396,7 +565,7 @@ function WorkspaceBody({
         editRevision={draft.editRevision}
         nonWhitespaceCharCount={draft.nonWhitespaceCharCount}
         saveState={draft.state}
-        transitionLocked={isSwitching}
+        transitionLocked={transitionLocked}
         onContentChange={draft.setContent}
         onRetry={() => void draft.retry().catch(() => undefined)}
       />
@@ -416,25 +585,30 @@ function WorkspaceBody({
           </svg>
         </button>
         {!historyCollapsed ? (
-          <div className="history-content">
-            <p className="pane-index">03</p>
-            <h2>历史版本</h2>
-            <div className="current-draft-summary">
-              <span>当前工作草稿</span>
-              <strong>修订 {draft.editRevision}</strong>
-              <small>{draft.nonWhitespaceCharCount} 字</small>
-            </div>
-            <div className="history-empty">
-              <span className="history-rule" />
-              <p>检查点将在下一阶段显示在这里。</p>
-            </div>
-          </div>
+          <HistoryPane
+            api={api}
+            chapter={{
+              ...chapter,
+              content: draft.content,
+              editRevision: draft.editRevision,
+              nonWhitespaceCharCount: draft.nonWhitespaceCharCount,
+            }}
+            currentDraft={{
+              editRevision: draft.editRevision,
+              nonWhitespaceCharCount: draft.nonWhitespaceCharCount,
+            }}
+            beforeRestore={flushBeforeRestore}
+            onRestored={restoredChapter}
+            onRestoreSettled={() => setIsRestoring(false)}
+            refreshToken={historyRefreshToken}
+            disabled={transitionLocked}
+          />
         ) : null}
       </aside>
 
-      {switchError ? (
+      {switchError || checkpointError ? (
         <div className="workspace-error" role="alert">
-          {switchError}
+          {switchError || checkpointError}
         </div>
       ) : null}
     </main>

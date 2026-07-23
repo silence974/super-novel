@@ -1,9 +1,11 @@
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::Mutex,
+    thread,
+    time::Duration,
 };
 
 use chrono::Utc;
@@ -25,6 +27,8 @@ const MAX_TITLE_CHARS: usize = 200;
 const MANIFEST_FILE_NAME: &str = "super-novel.toml";
 const INTERNAL_DIRECTORY_NAME: &str = ".super-novel";
 const DATABASE_FILE_NAME: &str = "project.db";
+const CLEANUP_ATTEMPTS: usize = 3;
+const CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Debug)]
 pub struct NovelBackend {
@@ -109,10 +113,13 @@ impl NovelBackend {
             Ok(backend)
         })();
 
-        if result.is_err() {
-            cleanup.remove_created_targets();
+        match result {
+            Ok(backend) => Ok(backend),
+            Err(error) => {
+                cleanup.remove_created_targets()?;
+                Err(error)
+            }
         }
-        result
     }
 
     pub fn open_project(directory: impl AsRef<Path>) -> Result<Self> {
@@ -557,17 +564,84 @@ impl CreationCleanup {
         }
     }
 
-    fn remove_created_targets(&self) {
-        if self.temporary_manifest_created {
-            let _ = fs::remove_file(&self.temporary_manifest_path);
+    fn remove_created_targets(&self) -> Result<()> {
+        self.remove_created_targets_with(
+            |path| fs::remove_file(path),
+            |path| fs::remove_dir_all(path),
+            || thread::sleep(CLEANUP_RETRY_DELAY),
+        )
+    }
+
+    fn remove_created_targets_with<RemoveFile, RemoveDirectory, Wait>(
+        &self,
+        mut remove_file: RemoveFile,
+        mut remove_directory: RemoveDirectory,
+        mut wait: Wait,
+    ) -> Result<()>
+    where
+        RemoveFile: FnMut(&Path) -> io::Result<()>,
+        RemoveDirectory: FnMut(&Path) -> io::Result<()>,
+        Wait: FnMut(),
+    {
+        let mut first_failure = None;
+        if self.temporary_manifest_created
+            && remove_target_with_retry(&self.temporary_manifest_path, &mut remove_file, &mut wait)
+                .is_err()
+        {
+            first_failure.get_or_insert(BackendError::CleanupFailed {
+                target: "temporary manifest",
+            });
         }
-        if self.temporary_internal_created {
-            let _ = fs::remove_dir_all(&self.temporary_internal_directory);
+        if self.temporary_internal_created
+            && remove_target_with_retry(
+                &self.temporary_internal_directory,
+                &mut remove_directory,
+                &mut wait,
+            )
+            .is_err()
+        {
+            first_failure.get_or_insert(BackendError::CleanupFailed {
+                target: "temporary internal directory",
+            });
         }
-        if self.final_internal_created {
-            let _ = fs::remove_dir_all(&self.final_internal_directory);
+        if self.final_internal_created
+            && remove_target_with_retry(
+                &self.final_internal_directory,
+                &mut remove_directory,
+                &mut wait,
+            )
+            .is_err()
+        {
+            first_failure.get_or_insert(BackendError::CleanupFailed {
+                target: "internal directory",
+            });
+        }
+
+        match first_failure {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
+}
+
+fn remove_target_with_retry<Remove, Wait>(
+    path: &Path,
+    remove: &mut Remove,
+    wait: &mut Wait,
+) -> io::Result<()>
+where
+    Remove: FnMut(&Path) -> io::Result<()>,
+    Wait: FnMut(),
+{
+    for attempt in 0..CLEANUP_ATTEMPTS {
+        match remove(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if attempt + 1 == CLEANUP_ATTEMPTS => return Err(error),
+            Err(_) => wait(),
+        }
+    }
+    unreachable!("cleanup attempts is non-zero")
 }
 
 fn verify_quick_check(connection: &Connection) -> Result<()> {
@@ -593,14 +667,20 @@ fn verify_quick_check(connection: &Connection) -> Result<()> {
 }
 
 fn load_project_identity(connection: &Connection) -> Result<(ProjectId, u32)> {
-    connection
-        .query_row(
-            "SELECT id, schema_version FROM projects LIMIT 1",
-            [],
-            |row| Ok((ProjectId::from_stored(row.get(0)?), row.get(1)?)),
-        )
-        .optional()?
-        .ok_or_else(|| BackendError::InvalidProject("database project record is missing".into()))
+    let mut statement = connection.prepare("SELECT id, schema_version FROM projects LIMIT 2")?;
+    let mut rows = statement.query([])?;
+    let Some(row) = rows.next()? else {
+        return Err(BackendError::InvalidProject(
+            "database project record is missing".into(),
+        ));
+    };
+    let identity = (ProjectId::from_stored(row.get(0)?), row.get(1)?);
+    if rows.next()?.is_some() {
+        return Err(BackendError::InvalidProject(
+            "database contains multiple project records".into(),
+        ));
+    }
+    Ok(identity)
 }
 
 fn load_outline(connection: &Connection) -> Result<Outline> {
@@ -1117,7 +1197,9 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::NovelBackend;
+    use std::{cell::RefCell, io, path::PathBuf};
+
+    use super::{CreationCleanup, NovelBackend};
     use crate::BackendError;
     use tempfile::tempdir;
 
@@ -1147,5 +1229,76 @@ mod tests {
 
         assert_eq!(journal_mode, "wal");
         assert_eq!(foreign_keys, 1);
+    }
+
+    #[test]
+    fn cleanup_failure_is_observable_and_only_owned_targets_are_attempted() {
+        let mut cleanup = CreationCleanup::new(
+            PathBuf::from("temporary-internal"),
+            PathBuf::from("temporary-manifest"),
+            PathBuf::from("final-internal"),
+        );
+        cleanup.temporary_manifest_created = true;
+        cleanup.final_internal_created = true;
+        let attempts = RefCell::new(Vec::new());
+
+        let error = cleanup
+            .remove_created_targets_with(
+                |path| {
+                    attempts.borrow_mut().push(path.to_owned());
+                    Err(io::Error::new(io::ErrorKind::PermissionDenied, "busy"))
+                },
+                |path| {
+                    attempts.borrow_mut().push(path.to_owned());
+                    Err(io::Error::new(io::ErrorKind::PermissionDenied, "busy"))
+                },
+                || {},
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            BackendError::CleanupFailed {
+                target: "temporary manifest"
+            }
+        ));
+        assert_eq!(
+            attempts.into_inner(),
+            vec![
+                PathBuf::from("temporary-manifest"),
+                PathBuf::from("temporary-manifest"),
+                PathBuf::from("temporary-manifest"),
+                PathBuf::from("final-internal"),
+                PathBuf::from("final-internal"),
+                PathBuf::from("final-internal"),
+            ]
+        );
+    }
+
+    #[test]
+    fn cleanup_treats_not_found_as_success_without_retrying() {
+        let mut cleanup = CreationCleanup::new(
+            PathBuf::from("temporary-internal"),
+            PathBuf::from("temporary-manifest"),
+            PathBuf::from("final-internal"),
+        );
+        cleanup.temporary_internal_created = true;
+        let attempts = RefCell::new(Vec::new());
+
+        cleanup
+            .remove_created_targets_with(
+                |_| unreachable!("no owned file target"),
+                |path| {
+                    attempts.borrow_mut().push(path.to_owned());
+                    Err(io::Error::new(io::ErrorKind::NotFound, "already gone"))
+                },
+                || {},
+            )
+            .unwrap();
+
+        assert_eq!(
+            attempts.into_inner(),
+            vec![PathBuf::from("temporary-internal")]
+        );
     }
 }

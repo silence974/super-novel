@@ -25,6 +25,9 @@ pub enum BackendError {
     #[error("project path is already in use")]
     ProjectLocked,
 
+    #[error("failed to clean up {target}")]
+    CleanupFailed { target: &'static str },
+
     #[error("chapter revision conflict: expected {expected}, current {current}")]
     RevisionConflict { expected: u64, current: u64 },
 

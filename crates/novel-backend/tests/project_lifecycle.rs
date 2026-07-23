@@ -37,6 +37,31 @@ fn rejects_a_manifest_database_identity_mismatch() {
 }
 
 #[test]
+fn rejects_a_database_with_multiple_projects() {
+    let root = tempdir().unwrap();
+    let project_dir = root.path().join("multiple-projects");
+    std::fs::create_dir(&project_dir).unwrap();
+    drop(NovelBackend::create_project(&project_dir, "唯一项目").unwrap());
+
+    let connection =
+        rusqlite::Connection::open(project_dir.join(".super-novel/project.db")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO projects(id, name, created_at_ms, updated_at_ms, schema_version)
+             VALUES ('second-project', '不应存在', 0, 0, 1)",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let error = NovelBackend::open_project(&project_dir).unwrap_err();
+    assert!(matches!(
+        error,
+        BackendError::InvalidProject(_) | BackendError::CorruptData(_)
+    ));
+}
+
+#[test]
 fn failed_creation_does_not_leave_a_partial_project() {
     let root = tempdir().unwrap();
     let project_dir = root.path().join("broken");

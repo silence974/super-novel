@@ -752,6 +752,14 @@ p {
   line-height: 1.1;
 }
 
+.transition-lock-notice {
+  margin: 0.75rem 0 0;
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 620;
+  letter-spacing: 0.01em;
+}
+
 .editor-pane textarea {
   width: 100%;
   min-height: 0;
@@ -767,6 +775,10 @@ p {
     "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif;
   font-size: clamp(1rem, 1.25vw, 1.12rem);
   line-height: 1.95;
+}
+
+.editor-pane textarea:read-only {
+  cursor: wait;
 }
 
 .editor-pane textarea::selection {

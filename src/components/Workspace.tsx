@@ -396,6 +396,7 @@ function WorkspaceBody({
         editRevision={draft.editRevision}
         nonWhitespaceCharCount={draft.nonWhitespaceCharCount}
         saveState={draft.state}
+        transitionLocked={isSwitching}
         onContentChange={draft.setContent}
         onRetry={() => void draft.retry().catch(() => undefined)}
       />

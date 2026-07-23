@@ -135,4 +135,67 @@ describe("useDraftAutosave", () => {
 
     expect(save).toHaveBeenCalledTimes(1);
   });
+
+  test("flush drains edits made while its first save is pending", async () => {
+    vi.useFakeTimers();
+    const first = deferred<SavedDraftDto>();
+    const second = deferred<SavedDraftDto>();
+    const save = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { result } = renderHook(() =>
+      useDraftAutosave({ chapter: chapter(), save, delayMs: 800 }),
+    );
+
+    act(() => result.current.setContent("第一版"));
+    let flushPromise!: ReturnType<typeof result.current.flush>;
+    act(() => {
+      flushPromise = result.current.flush();
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.setContent("第二版"));
+    await act(async () => first.resolve(savedDraft("第一版", 1)));
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenNthCalledWith(2, {
+      chapterId: "c1",
+      expectedEditRevision: 1,
+      content: "第二版",
+    });
+    let didResolve = false;
+    void flushPromise.then(() => {
+      didResolve = true;
+    });
+    await act(async () => undefined);
+    expect(didResolve).toBe(false);
+
+    await act(async () => second.resolve(savedDraft("第二版", 2)));
+    await expect(flushPromise).resolves.toMatchObject({
+      content: "第二版",
+      editRevision: 2,
+    });
+  });
+
+  test("returns to saved when an edit is reverted to the persisted content", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn();
+    const { result } = renderHook(() =>
+      useDraftAutosave({
+        chapter: chapter({ content: "原文" }),
+        save,
+        delayMs: 800,
+      }),
+    );
+
+    act(() => result.current.setContent("临时修改"));
+    act(() => result.current.setContent("原文"));
+    expect(result.current.state).toBe("dirty");
+
+    await act(async () => vi.advanceTimersByTimeAsync(800));
+
+    expect(save).not.toHaveBeenCalled();
+    expect(result.current.state).toBe("saved");
+  });
 });

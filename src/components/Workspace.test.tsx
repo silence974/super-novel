@@ -2,7 +2,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import type { NovelApi } from "../api";
-import { chapter, savedDraft, workspace, workspaceApi } from "../test/fixtures";
+import type { SavedDraftDto } from "../contracts";
+import {
+  chapter,
+  deferred,
+  savedDraft,
+  workspace,
+  workspaceApi,
+} from "../test/fixtures";
 import { Workspace } from "./Workspace";
 
 test("loads the selected chapter and presents the three-pane saved workspace", async () => {
@@ -82,6 +89,102 @@ test("flushes and checkpoints the current chapter before loading another chapter
   await waitFor(() => {
     expect(screen.getByRole("button", { name: /^雨夜/ })).toHaveTextContent("4 字");
   });
+});
+
+test("waits for the newest in-flight draft before checkpointing and loading", async () => {
+  const user = userEvent.setup();
+  const first = deferred<SavedDraftDto>();
+  const second = deferred<SavedDraftDto>();
+  const next = chapter({
+    id: "c2",
+    title: "渡口",
+    content: "新章正文",
+    editRevision: 7,
+  });
+  const initial = workspace();
+  initial.outline.volumes[0].chapters.push(next);
+  const events: string[] = [];
+  const api = workspaceApi({
+    getChapter: vi.fn(async (chapterId: string) => {
+      events.push(`load:${chapterId}`);
+      return chapterId === "c1" ? chapter() : next;
+    }),
+    saveWorkingDraft: vi
+      .fn()
+      .mockImplementationOnce(() => {
+        events.push("save:1");
+        return first.promise;
+      })
+      .mockImplementationOnce(() => {
+        events.push("save:2");
+        return second.promise;
+      }),
+    createCheckpoint: vi.fn(async (input) => {
+      events.push(`checkpoint:${input.expectedEditRevision}`);
+      return {
+        id: "cp2",
+        chapterId: "c1",
+        source: "chapter_switch" as const,
+        sourceEditRevision: input.expectedEditRevision,
+        restoredFromCheckpointId: null,
+        content: "第二版",
+        nonWhitespaceCharCount: 3,
+        createdAtMs: 25,
+      };
+    }),
+  });
+
+  render(<Workspace api={api} initialWorkspace={initial} autosaveDelayMs={0} />);
+  const editor = await screen.findByRole("textbox", { name: "雨夜 正文" });
+  await user.type(editor, "第一版");
+  await waitFor(() => expect(api.saveWorkingDraft).toHaveBeenCalledTimes(1));
+  await user.clear(editor);
+  await user.type(editor, "第二版");
+  events.length = 0;
+  await user.click(screen.getByRole("button", { name: /^渡口/ }));
+
+  await first.resolve(savedDraft("第一版", 1));
+  await waitFor(() => expect(api.saveWorkingDraft).toHaveBeenCalledTimes(2));
+  expect(api.createCheckpoint).not.toHaveBeenCalled();
+  expect(api.getChapter).toHaveBeenCalledTimes(1);
+
+  await second.resolve(savedDraft("第二版", 2));
+  expect(
+    await screen.findByRole("textbox", { name: "渡口 正文" }),
+  ).toHaveValue("新章正文");
+  expect(events).toEqual(["save:2", "checkpoint:2", "load:c2"]);
+  expect(api.createCheckpoint).toHaveBeenCalledWith({
+    chapterId: "c1",
+    expectedEditRevision: 2,
+    source: "chapter_switch",
+  });
+});
+
+test("locks the editor accessibly while a chapter transition save is pending", async () => {
+  const user = userEvent.setup();
+  const pending = deferred<SavedDraftDto>();
+  const next = chapter({ id: "c2", title: "渡口", content: "新章正文" });
+  const initial = workspace();
+  initial.outline.volumes[0].chapters.push(next);
+  const api = workspaceApi({
+    getChapter: vi.fn(async (chapterId: string) =>
+      chapterId === "c1" ? chapter() : next,
+    ),
+    saveWorkingDraft: vi.fn().mockReturnValue(pending.promise),
+  });
+
+  render(<Workspace api={api} initialWorkspace={initial} />);
+  const editor = await screen.findByRole("textbox", { name: "雨夜 正文" });
+  await user.type(editor, "切换前正文");
+  await user.click(screen.getByRole("button", { name: /^渡口/ }));
+
+  expect(editor).toHaveAttribute("readonly");
+  expect(screen.getByText("正在安全保存，完成前正文暂时锁定。")).toBeVisible();
+  const lockedContent = (editor as HTMLTextAreaElement).value;
+  await user.type(editor, "不应写入");
+  expect(editor).toHaveValue(lockedContent);
+
+  await pending.resolve(savedDraft("切换前正文", 1));
 });
 
 test("shows retry and conflict guidance without making the editor read-only", async () => {

@@ -15,6 +15,7 @@ interface EditorPaneProps {
   editRevision: number;
   nonWhitespaceCharCount: number;
   saveState: SaveState;
+  transitionLocked?: boolean;
   onContentChange(content: string): void;
   onRetry(): void;
 }
@@ -25,6 +26,7 @@ export function EditorPane({
   editRevision,
   nonWhitespaceCharCount,
   saveState,
+  transitionLocked = false,
   onContentChange,
   onRetry,
 }: EditorPaneProps) {
@@ -33,11 +35,24 @@ export function EditorPane({
       <header className="editor-heading">
         <p className="editor-location">工作草稿 / 修订 {editRevision}</p>
         <h1>{chapter.title}</h1>
+        {transitionLocked ? (
+          <p
+            className="transition-lock-notice"
+            id={`transition-lock-${chapter.id}`}
+            aria-live="polite"
+          >
+            正在安全保存，完成前正文暂时锁定。
+          </p>
+        ) : null}
       </header>
 
       <textarea
         aria-label={`${chapter.title} 正文`}
+        aria-describedby={
+          transitionLocked ? `transition-lock-${chapter.id}` : undefined
+        }
         value={content}
+        readOnly={transitionLocked}
         spellCheck={false}
         onChange={(event) => onContentChange(event.target.value)}
       />

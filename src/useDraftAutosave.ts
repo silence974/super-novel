@@ -97,6 +97,7 @@ export function useDraftAutosave({
       stateRef.current !== "error" &&
       stateRef.current !== "conflict"
     ) {
+      updateState("saved");
       return {
         chapterId: currentChapter.id,
         content: currentContent,
@@ -211,7 +212,18 @@ export function useDraftAutosave({
   );
 
   const retry = useCallback(() => runSaveRef.current(), []);
-  const flush = useCallback(() => runSaveRef.current(), []);
+  const flush = useCallback(async () => {
+    while (true) {
+      const targetGeneration = generationRef.current;
+      const snapshot = await runSaveRef.current();
+      if (
+        generationRef.current === targetGeneration &&
+        contentRef.current === snapshot.content
+      ) {
+        return snapshot;
+      }
+    }
+  }, []);
 
   return {
     content,

@@ -16,6 +16,7 @@ interface EditorPaneProps {
   nonWhitespaceCharCount: number;
   saveState: SaveState;
   transitionLocked?: boolean;
+  transitionLockMessage?: string;
   onContentChange(content: string): void;
   onRetry(): void;
 }
@@ -27,6 +28,7 @@ export function EditorPane({
   nonWhitespaceCharCount,
   saveState,
   transitionLocked = false,
+  transitionLockMessage = "正在安全保存，完成前正文暂时锁定。",
   onContentChange,
   onRetry,
 }: EditorPaneProps) {
@@ -41,7 +43,7 @@ export function EditorPane({
             id={`transition-lock-${chapter.id}`}
             aria-live="polite"
           >
-            正在安全保存，完成前正文暂时锁定。
+            {transitionLockMessage}
           </p>
         ) : null}
       </header>

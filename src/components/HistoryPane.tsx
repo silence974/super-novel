@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { NovelApi } from "../api";
 import { safeCommandMessage } from "../api";
 import type {
@@ -21,6 +21,7 @@ interface HistoryPaneProps {
     nonWhitespaceCharCount: number;
   };
   disabled?: boolean;
+  onPreviewOpenChange?(open: boolean): void;
 }
 
 const sourceLabels: Record<CheckpointSource, string> = {
@@ -49,6 +50,7 @@ export function HistoryPane({
   refreshToken = 0,
   currentDraft,
   disabled = false,
+  onPreviewOpenChange,
 }: HistoryPaneProps) {
   const [summaries, setSummaries] = useState<CheckpointSummaryDto[]>([]);
   const [listState, setListState] = useState<"loading" | "ready" | "error">(
@@ -59,19 +61,45 @@ export function HistoryPane({
   const [previewState, setPreviewState] = useState<"idle" | "loading">("idle");
   const [previewError, setPreviewError] = useState("");
   const [isRestoring, setIsRestoring] = useState(false);
+  const mountedRef = useRef(false);
+  const listGenerationRef = useRef(0);
+  const previewGenerationRef = useRef(0);
+  const restoreGenerationRef = useRef(0);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const previewOpenRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      listGenerationRef.current += 1;
+      previewGenerationRef.current += 1;
+      restoreGenerationRef.current += 1;
+      if (previewOpenRef.current) {
+        onPreviewOpenChange?.(false);
+      }
+    };
+  }, [onPreviewOpenChange]);
 
   const loadSummaries = useCallback(async () => {
+    const generation = listGenerationRef.current + 1;
+    listGenerationRef.current = generation;
     setListState("loading");
     setListError("");
     try {
       const loaded = await api.listCheckpoints(chapter.id);
-      setSummaries(loaded);
-      setListState("ready");
+      if (mountedRef.current && listGenerationRef.current === generation) {
+        setSummaries(loaded);
+        setListState("ready");
+      }
     } catch (error: unknown) {
-      setListError(
-        safeCommandMessage(error, "无法读取历史版本，请重试。"),
-      );
-      setListState("error");
+      if (mountedRef.current && listGenerationRef.current === generation) {
+        setListError(
+          safeCommandMessage(error, "无法读取历史版本，请重试。"),
+        );
+        setListState("error");
+      }
     }
   }, [api, chapter.id]);
 
@@ -79,20 +107,63 @@ export function HistoryPane({
     void loadSummaries();
   }, [loadSummaries, refreshToken]);
 
-  const openPreview = async (summary: CheckpointSummaryDto) => {
+  useEffect(() => {
+    previewGenerationRef.current += 1;
+    setPreview(null);
+    setPreviewState("idle");
+    setPreviewError("");
+  }, [chapter.id]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (preview !== null && dialog !== null) {
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+      if (!previewOpenRef.current) {
+        previewOpenRef.current = true;
+        onPreviewOpenChange?.(true);
+      }
+      return;
+    }
+
+    if (previewOpenRef.current) {
+      previewOpenRef.current = false;
+      onPreviewOpenChange?.(false);
+      if (dialog?.open) {
+        dialog.close();
+      }
+      previewTriggerRef.current?.focus();
+    }
+  }, [onPreviewOpenChange, preview]);
+
+  const openPreview = async (
+    summary: CheckpointSummaryDto,
+    trigger: HTMLButtonElement,
+  ) => {
     if (disabled) {
       return;
     }
+    previewTriggerRef.current = trigger;
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
     setPreviewState("loading");
     setPreviewError("");
     try {
-      setPreview(await api.getCheckpoint(summary.id));
+      const loaded = await api.getCheckpoint(summary.id);
+      if (mountedRef.current && previewGenerationRef.current === generation) {
+        setPreview(loaded);
+      }
     } catch (error: unknown) {
-      setPreviewError(
-        safeCommandMessage(error, "无法读取这个历史版本，请重试。"),
-      );
+      if (mountedRef.current && previewGenerationRef.current === generation) {
+        setPreviewError(
+          safeCommandMessage(error, "无法读取这个历史版本，请重试。"),
+        );
+      }
     } finally {
-      setPreviewState("idle");
+      if (mountedRef.current && previewGenerationRef.current === generation) {
+        setPreviewState("idle");
+      }
     }
   };
 
@@ -103,6 +174,8 @@ export function HistoryPane({
 
     setIsRestoring(true);
     setPreviewError("");
+    const generation = restoreGenerationRef.current + 1;
+    restoreGenerationRef.current = generation;
     try {
       const snapshot = beforeRestore ? await beforeRestore() : null;
       const restored = await api.restoreCheckpoint({
@@ -110,17 +183,29 @@ export function HistoryPane({
         checkpointId: preview.id,
         expectedEditRevision: snapshot?.editRevision ?? chapter.editRevision,
       });
-      onRestored(restored);
-      setPreview(null);
-      await loadSummaries();
+      if (mountedRef.current && restoreGenerationRef.current === generation) {
+        onRestored(restored);
+        setPreview(null);
+        await loadSummaries();
+      }
     } catch (error: unknown) {
-      setPreviewError(
-        safeCommandMessage(error, "无法恢复这个版本，当前正文没有改变。"),
-      );
+      if (mountedRef.current && restoreGenerationRef.current === generation) {
+        setPreviewError(
+          safeCommandMessage(error, "无法恢复这个版本，当前正文没有改变。"),
+        );
+      }
     } finally {
-      setIsRestoring(false);
-      onRestoreSettled?.();
+      if (mountedRef.current && restoreGenerationRef.current === generation) {
+        setIsRestoring(false);
+        onRestoreSettled?.();
+      }
     }
+  };
+
+  const closePreview = () => {
+    previewGenerationRef.current += 1;
+    setPreview(null);
+    setPreviewError("");
   };
 
   return (
@@ -166,7 +251,9 @@ export function HistoryPane({
             <li key={summary.id}>
               <button
                 type="button"
-                onClick={() => void openPreview(summary)}
+                onClick={(event) =>
+                  void openPreview(summary, event.currentTarget)
+                }
                 disabled={disabled || previewState === "loading"}
                 aria-label={`版本 ${summary.sourceEditRevision} · ${sourceLabels[summary.source]} · ${summary.nonWhitespaceCharCount} 字`}
               >
@@ -198,13 +285,15 @@ export function HistoryPane({
       ) : null}
 
       {preview ? (
-        <div className="history-dialog-backdrop">
-          <section
-            className="history-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="history-dialog-title"
-          >
+        <dialog
+          ref={dialogRef}
+          className="history-dialog"
+          aria-labelledby="history-dialog-title"
+          onCancel={(event) => {
+            event.preventDefault();
+            closePreview();
+          }}
+        >
             <header>
               <div>
                 <p className="pane-index">只读预览</p>
@@ -218,6 +307,14 @@ export function HistoryPane({
                 <div>
                   <dt>字数</dt>
                   <dd>{preview.nonWhitespaceCharCount} 字</dd>
+                </div>
+                <div>
+                  <dt>创建时间</dt>
+                  <dd>
+                    <time dateTime={new Date(preview.createdAtMs).toISOString()}>
+                      {formatCreatedAt(preview.createdAtMs)}
+                    </time>
+                  </dd>
                 </div>
               </dl>
             </header>
@@ -237,10 +334,7 @@ export function HistoryPane({
                 type="button"
                 autoFocus
                 disabled={isRestoring}
-                onClick={() => {
-                  setPreview(null);
-                  setPreviewError("");
-                }}
+                onClick={closePreview}
               >
                 取消
               </button>
@@ -253,8 +347,7 @@ export function HistoryPane({
                 {isRestoring ? "正在恢复" : "确认恢复"}
               </button>
             </footer>
-          </section>
-        </div>
+        </dialog>
       ) : null}
     </div>
   );

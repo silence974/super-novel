@@ -583,6 +583,8 @@ test("blocks restore when the latest local draft cannot be flushed", async () =>
   );
   expect(api.restoreCheckpoint).not.toHaveBeenCalled();
   expect(editor).toHaveValue("不能丢失");
+  expect(editor).toHaveAttribute("readonly");
+  await user.click(screen.getByRole("button", { name: "取消" }));
   expect(editor).not.toHaveAttribute("readonly");
 });
 
@@ -612,6 +614,103 @@ test("waits for an active checkpoint before starting a restore", async () => {
 
   await act(async () => pending.resolve(historical));
   await waitFor(() => expect(api.restoreCheckpoint).toHaveBeenCalledTimes(1));
+});
+
+test("blocks restore when the active checkpoint fails and preserves the draft", async () => {
+  const user = userEvent.setup();
+  const historical = checkpoint();
+  const pending = deferred<ReturnType<typeof checkpoint>>();
+  const api = workspaceApi({
+    getChapter: vi.fn().mockResolvedValue(chapter({ editRevision: 18 })),
+    saveWorkingDraft: vi.fn(async (input) =>
+      savedDraft(input.content, 19),
+    ),
+    createCheckpoint: vi.fn().mockReturnValue(pending.promise),
+    listCheckpoints: vi.fn().mockResolvedValue([historical]),
+    getCheckpoint: vi.fn().mockResolvedValue(historical),
+    restoreCheckpoint: vi.fn(),
+  });
+
+  render(<Workspace api={api} initialWorkspace={workspace()} />);
+  const editor = await screen.findByRole("textbox", { name: "雨夜 正文" });
+  await user.type(editor, "必须留存的正文");
+  await user.click(screen.getByRole("button", { name: "创建版本" }));
+  await user.click(await screen.findByRole("button", { name: /版本 17/ }));
+  await user.click(
+    await screen.findByRole("button", { name: "确认恢复" }),
+  );
+
+  await act(async () =>
+    pending.reject({
+      code: "internal_error",
+      message: "历史版本创建失败。",
+      details: {},
+      correlationId: "corr-pending-checkpoint",
+    }),
+  );
+
+  expect(api.restoreCheckpoint).not.toHaveBeenCalled();
+  expect(editor).toHaveValue("必须留存的正文");
+  expect(
+    within(screen.getByRole("dialog", { name: "预览历史版本" })).getByRole(
+      "alert",
+    ),
+  ).toHaveTextContent("历史版本创建失败。");
+  expect(screen.getByRole("main", { name: "写作工作台" })).toBeVisible();
+});
+
+test("locks every background action while the restore preview is modal", async () => {
+  const user = userEvent.setup();
+  const api = workspaceApi({
+    getChapter: vi.fn().mockResolvedValue(chapter({ editRevision: 18 })),
+    listCheckpoints: vi.fn().mockResolvedValue([checkpoint()]),
+    getCheckpoint: vi.fn().mockResolvedValue(checkpoint()),
+    createCheckpoint: vi.fn(),
+  });
+
+  render(<Workspace api={api} initialWorkspace={workspace()} />);
+  const editor = await screen.findByRole("textbox", { name: "雨夜 正文" });
+  await user.click(await screen.findByRole("button", { name: /版本 17/ }));
+  expect(
+    await screen.findByRole("dialog", { name: "预览历史版本" }),
+  ).toBeVisible();
+
+  expect(screen.getByRole("button", { name: "创建版本" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "关闭项目" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "新建卷" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "收起历史版本" })).toBeDisabled();
+  expect(editor).toHaveAttribute("readonly");
+
+  fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+  expect(api.createCheckpoint).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole("button", { name: "确认恢复" }),
+  ).toBeEnabled();
+  expect(screen.getByRole("button", { name: "取消" })).toBeEnabled();
+});
+
+test("does not schedule a periodic checkpoint while restore preview is open", async () => {
+  vi.useFakeTimers();
+  const api = workspaceApi({
+    getChapter: vi.fn().mockResolvedValue(chapter({ editRevision: 18 })),
+    listCheckpoints: vi.fn().mockResolvedValue([checkpoint()]),
+    getCheckpoint: vi.fn().mockResolvedValue(checkpoint()),
+    createCheckpoint: vi.fn(),
+  });
+
+  render(<Workspace api={api} initialWorkspace={workspace()} autosaveDelayMs={0} />);
+  await act(async () => Promise.resolve());
+  fireEvent.change(screen.getByRole("textbox", { name: "雨夜 正文" }), {
+    target: { value: "预览期间的本地正文" },
+  });
+  await act(async () => vi.advanceTimersByTimeAsync(0));
+  fireEvent.click(screen.getByRole("button", { name: /版本 17/ }));
+  await act(async () => Promise.resolve());
+
+  expect(screen.getByRole("dialog", { name: "预览历史版本" })).toBeVisible();
+  await act(async () => vi.advanceTimersByTimeAsync(300_000));
+
+  expect(api.createCheckpoint).not.toHaveBeenCalled();
 });
 
 test("closes an empty project without trying to checkpoint", async () => {

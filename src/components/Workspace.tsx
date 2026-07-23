@@ -310,6 +310,7 @@ function WorkspaceBody({
   const [isSwitching, setIsSwitching] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isCheckpointing, setIsCheckpointing] = useState(false);
   const [switchError, setSwitchError] = useState("");
   const [checkpointError, setCheckpointError] = useState("");
@@ -344,8 +345,9 @@ function WorkspaceBody({
   });
   currentContentRef.current = draft.content;
   const transitionLocked = isSwitching || isClosing || isRestoring;
-  const transitionLockedRef = useRef(transitionLocked);
-  transitionLockedRef.current = transitionLocked;
+  const backgroundLocked = transitionLocked || isPreviewOpen;
+  const backgroundLockedRef = useRef(backgroundLocked);
+  backgroundLockedRef.current = backgroundLocked;
 
   const activeVolume = workspace.outline.volumes.find((volume) =>
     volume.chapters.some((item) => item.id === chapter.id),
@@ -403,14 +405,14 @@ function WorkspaceBody({
     );
     const timer = setTimeout(() => {
       if (
-        !transitionLockedRef.current &&
+        !backgroundLockedRef.current &&
         currentContentRef.current !== checkpointedContentRef.current
       ) {
         void createCheckpoint("periodic").catch(() => undefined);
       }
     }, remaining);
     return () => clearTimeout(timer);
-  }, [checkpointClock, createCheckpoint, draft.content, transitionLocked]);
+  }, [backgroundLocked, checkpointClock, createCheckpoint, draft.content]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -419,7 +421,7 @@ function WorkspaceBody({
         (event.ctrlKey || event.metaKey)
       ) {
         event.preventDefault();
-        if (transitionLockedRef.current) {
+        if (backgroundLockedRef.current) {
           return;
         }
         void createCheckpoint("manual").catch(() => undefined);
@@ -499,7 +501,13 @@ function WorkspaceBody({
   const flushBeforeRestore = async () => {
     setIsRestoring(true);
     setCheckpointError("");
-    await checkpointQueueRef.current.catch(() => undefined);
+    while (checkpointTailRef.current !== null) {
+      const pendingCheckpoint = checkpointTailRef.current;
+      await pendingCheckpoint;
+      if (checkpointTailRef.current === pendingCheckpoint) {
+        checkpointTailRef.current = null;
+      }
+    }
     return draft.flush();
   };
 
@@ -534,7 +542,7 @@ function WorkspaceBody({
           <button
             className="topbar-version-button"
             type="button"
-            disabled={isClosing || isSwitching || isRestoring || isCheckpointing}
+            disabled={backgroundLocked || isCheckpointing}
             onClick={() => void createCheckpoint("manual").catch(() => undefined)}
           >
             {isCheckpointing ? "正在创建" : "创建版本"}
@@ -542,7 +550,7 @@ function WorkspaceBody({
           <button
             className="topbar-close-button"
             type="button"
-            disabled={isClosing || isSwitching || isRestoring}
+            disabled={backgroundLocked}
             onClick={() => void closeProject()}
           >
             {isClosing ? "正在关闭" : "关闭项目"}
@@ -553,7 +561,7 @@ function WorkspaceBody({
       <OutlinePane
         outline={workspace.outline}
         activeChapterId={chapter.id}
-        disabled={transitionLocked}
+        disabled={backgroundLocked}
         onSelectChapter={(chapterId) => void selectChapter(chapterId)}
         onCreateVolume={onCreateVolume}
         onCreateChapter={createAndSelectChapter}
@@ -565,7 +573,12 @@ function WorkspaceBody({
         editRevision={draft.editRevision}
         nonWhitespaceCharCount={draft.nonWhitespaceCharCount}
         saveState={draft.state}
-        transitionLocked={transitionLocked}
+        transitionLocked={backgroundLocked}
+        transitionLockMessage={
+          isPreviewOpen
+            ? "历史版本预览打开期间，正文暂时锁定。"
+            : undefined
+        }
         onContentChange={draft.setContent}
         onRetry={() => void draft.retry().catch(() => undefined)}
       />
@@ -576,6 +589,7 @@ function WorkspaceBody({
           className="history-toggle"
           aria-expanded={!historyCollapsed}
           aria-label={historyCollapsed ? "展开历史版本" : "收起历史版本"}
+          disabled={backgroundLocked}
           onClick={() => setHistoryCollapsed((current) => !current)}
         >
           <svg aria-hidden="true" viewBox="0 0 16 16">
@@ -602,6 +616,7 @@ function WorkspaceBody({
             onRestoreSettled={() => setIsRestoring(false)}
             refreshToken={historyRefreshToken}
             disabled={transitionLocked}
+            onPreviewOpenChange={setIsPreviewOpen}
           />
         ) : null}
       </aside>

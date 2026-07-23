@@ -1140,27 +1140,25 @@ p {
   color: var(--error);
 }
 
-.history-dialog-backdrop {
-  position: fixed;
-  z-index: 4;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: clamp(1.5rem, 5vw, 4rem);
+.history-dialog::backdrop {
   background: rgba(39, 35, 31, 0.46);
 }
 
 .history-dialog {
-  display: grid;
   width: min(48rem, 100%);
   max-height: min(44rem, calc(100dvh - 3rem));
-  grid-template-rows: auto minmax(12rem, 1fr) auto auto;
+  margin: auto;
   padding: clamp(1.2rem, 3vw, 2rem);
   color: var(--ink);
   background: #fcfaf6;
   border: 1px solid #c8bdb0;
   border-radius: 0.5rem;
   box-shadow: 0 22px 60px rgba(54, 44, 35, 0.2);
+}
+
+.history-dialog[open] {
+  display: grid;
+  grid-template-rows: auto minmax(12rem, 1fr) auto auto;
 }
 
 .history-dialog > header {

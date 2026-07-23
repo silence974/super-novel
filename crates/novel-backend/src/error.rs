@@ -16,6 +16,15 @@ pub enum BackendError {
     #[error("project database has not been initialized")]
     NotInitialized,
 
+    #[error("invalid project: {0}")]
+    InvalidProject(String),
+
+    #[error("project requires schema version {required}, found {found}")]
+    MigrationRequired { required: u32, found: u32 },
+
+    #[error("project path is already in use")]
+    ProjectLocked,
+
     #[error("chapter revision conflict: expected {expected}, current {current}")]
     RevisionConflict { expected: u64, current: u64 },
 
@@ -24,6 +33,15 @@ pub enum BackendError {
 
     #[error("database access failed: {0}")]
     Database(#[from] rusqlite::Error),
+
+    #[error("file operation failed: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("manifest serialization failed: {0}")]
+    Manifest(#[from] toml::ser::Error),
+
+    #[error("manifest parsing failed: {0}")]
+    ManifestParse(#[from] toml::de::Error),
 
     #[error("backend lock is poisoned")]
     LockPoisoned,

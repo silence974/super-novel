@@ -1,5 +1,6 @@
 mod backend;
 mod error;
+mod manifest;
 mod model;
 mod schema;
 mod sqlite_value;
@@ -10,4 +11,5 @@ pub use model::{
     Chapter, ChapterCheckpoint, ChapterCheckpointSummary, ChapterId, ChapterStatus, ChapterSummary,
     CheckpointId, CheckpointSource, CreateChapter, CreateCheckpoint, CreateVolume, Outline,
     Project, ProjectId, RestoreCheckpoint, SaveWorkingDraft, VolumeId, VolumeNode, WorkId,
+    Workspace,
 };

@@ -1,20 +1,32 @@
-use std::{path::Path, str::FromStr, sync::Mutex};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Mutex,
+};
 
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use uuid::Uuid;
 
 use crate::{
     BackendError, Chapter, ChapterCheckpoint, ChapterCheckpointSummary, ChapterId, ChapterStatus,
     ChapterSummary, CheckpointId, CheckpointSource, CreateChapter, CreateCheckpoint, CreateVolume,
     Outline, Project, ProjectId, RestoreCheckpoint, Result, SaveWorkingDraft, VolumeId, VolumeNode,
-    WorkId,
+    WorkId, Workspace,
+    manifest::{FORMAT_VERSION, ProjectManifest},
     schema::{MIGRATION_1, SCHEMA_VERSION},
     sqlite_value::{from_sql_i64, to_sql_i64},
 };
 
 const POSITION_STEP: i64 = 1_024;
 const MAX_TITLE_CHARS: usize = 200;
+const MANIFEST_FILE_NAME: &str = "super-novel.toml";
+const INTERNAL_DIRECTORY_NAME: &str = ".super-novel";
+const DATABASE_FILE_NAME: &str = "project.db";
 
+#[derive(Debug)]
 pub struct NovelBackend {
     connection: Mutex<Connection>,
 }
@@ -26,24 +38,119 @@ impl NovelBackend {
     }
 
     fn from_connection(connection: Connection) -> Result<Self> {
-        let journal_mode: String =
-            connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
-        if !journal_mode.eq_ignore_ascii_case("wal") {
-            return Err(BackendError::CorruptData(format!(
-                "journal_mode must be wal, got {journal_mode}"
-            )));
-        }
-
-        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let foreign_keys: i64 =
-            connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
-        if foreign_keys != 1 {
-            return Err(BackendError::CorruptData(format!(
-                "foreign_keys must be 1, got {foreign_keys}"
-            )));
-        }
-
+        configure_connection(&connection)?;
         connection.execute_batch(MIGRATION_1)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    pub fn create_project(directory: impl AsRef<Path>, name: impl Into<String>) -> Result<Self> {
+        let directory = resolve_project_directory(directory.as_ref())?;
+        let name = validated_title(name.into(), "project name")?;
+        let manifest_path = directory.join(MANIFEST_FILE_NAME);
+        let internal_directory = directory.join(INTERNAL_DIRECTORY_NAME);
+
+        if manifest_path.try_exists()? || internal_directory.try_exists()? {
+            return Err(BackendError::ProjectLocked);
+        }
+
+        let temporary_suffix = Uuid::now_v7();
+        let temporary_internal_directory =
+            directory.join(format!("{INTERNAL_DIRECTORY_NAME}.tmp-{temporary_suffix}"));
+        let temporary_manifest_path =
+            directory.join(format!("{MANIFEST_FILE_NAME}.tmp-{temporary_suffix}"));
+        let mut cleanup = CreationCleanup::new(
+            temporary_internal_directory.clone(),
+            temporary_manifest_path.clone(),
+            internal_directory.clone(),
+        );
+
+        let result = (|| {
+            fs::create_dir(&temporary_internal_directory)?;
+            cleanup.temporary_internal_created = true;
+
+            let temporary_backend =
+                Self::open(temporary_internal_directory.join(DATABASE_FILE_NAME))?;
+            let project = temporary_backend.initialize_project(name)?;
+            drop(temporary_backend);
+
+            let manifest = ProjectManifest {
+                format_version: FORMAT_VERSION,
+                project_id: project.id,
+                name: project.name,
+            };
+            let serialized_manifest = toml::to_string(&manifest)?;
+            let mut temporary_manifest = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary_manifest_path)?;
+            cleanup.temporary_manifest_created = true;
+            temporary_manifest.write_all(serialized_manifest.as_bytes())?;
+            temporary_manifest.sync_all()?;
+            drop(temporary_manifest);
+
+            if manifest_path.try_exists()? || internal_directory.try_exists()? {
+                return Err(BackendError::ProjectLocked);
+            }
+
+            fs::rename(&temporary_internal_directory, &internal_directory)?;
+            cleanup.temporary_internal_created = false;
+            cleanup.final_internal_created = true;
+
+            if manifest_path.try_exists()? {
+                return Err(BackendError::ProjectLocked);
+            }
+
+            let backend = Self::open(internal_directory.join(DATABASE_FILE_NAME))?;
+            fs::rename(&temporary_manifest_path, &manifest_path)?;
+            cleanup.temporary_manifest_created = false;
+            cleanup.final_internal_created = false;
+            Ok(backend)
+        })();
+
+        if result.is_err() {
+            cleanup.remove_created_targets();
+        }
+        result
+    }
+
+    pub fn open_project(directory: impl AsRef<Path>) -> Result<Self> {
+        let directory = resolve_project_directory(directory.as_ref())?;
+        let manifest_contents = fs::read_to_string(directory.join(MANIFEST_FILE_NAME))?;
+        let manifest: ProjectManifest = toml::from_str(&manifest_contents)?;
+        if manifest.format_version != FORMAT_VERSION {
+            return Err(BackendError::InvalidProject(format!(
+                "unsupported manifest format version {}",
+                manifest.format_version
+            )));
+        }
+
+        let database_path = directory
+            .join(INTERNAL_DIRECTORY_NAME)
+            .join(DATABASE_FILE_NAME);
+        if !database_path.is_file() {
+            return Err(BackendError::InvalidProject(
+                "project database is missing".into(),
+            ));
+        }
+
+        let connection = Connection::open(database_path)?;
+        configure_connection(&connection)?;
+        verify_quick_check(&connection)?;
+        let (database_project_id, schema_version) = load_project_identity(&connection)?;
+        if schema_version != SCHEMA_VERSION {
+            return Err(BackendError::MigrationRequired {
+                required: SCHEMA_VERSION,
+                found: schema_version,
+            });
+        }
+        if manifest.project_id != database_project_id {
+            return Err(BackendError::InvalidProject(
+                "manifest and database project identities do not match".into(),
+            ));
+        }
+
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -377,78 +484,15 @@ impl NovelBackend {
 
     pub fn outline(&self) -> Result<Outline> {
         let connection = self.lock()?;
-        let work_id = require_work_id(&connection)?;
+        load_outline(&connection)
+    }
 
-        let mut volumes_statement = connection.prepare(
-            "SELECT id, title, position FROM volumes WHERE work_id = ?1 ORDER BY position, id",
-        )?;
-        let volume_rows = volumes_statement.query_map([work_id.as_str()], |row| {
-            Ok(VolumeNode {
-                id: VolumeId::from_stored(row.get(0)?),
-                title: row.get(1)?,
-                position: row.get(2)?,
-                chapters: Vec::new(),
-            })
-        })?;
-        let mut volumes = volume_rows.collect::<std::result::Result<Vec<_>, _>>()?;
-
-        let mut chapters_statement = connection.prepare(
-            "SELECT c.id, c.volume_id, c.title, c.status, c.position, d.edit_revision,
-                    c.non_whitespace_char_count, c.updated_at_ms
-             FROM chapters c
-             JOIN chapter_drafts d ON d.chapter_id = c.id
-             WHERE c.work_id = ?1
-             ORDER BY CASE WHEN c.volume_id IS NULL THEN 0 ELSE 1 END, c.position, c.id",
-        )?;
-        let chapter_rows = chapters_statement.query_map([work_id.as_str()], |row| {
-            let status: String = row.get(3)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-                status,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        })?;
-
-        let mut ungrouped_chapters = Vec::new();
-        for row in chapter_rows {
-            let (id, volume_id, title, status, position, revision, char_count, updated_at_ms) =
-                row?;
-            let summary = ChapterSummary {
-                id: ChapterId::from_stored(id),
-                title,
-                status: parse_chapter_status(&status)?,
-                position,
-                edit_revision: from_sql_i64(revision, "edit_revision")?,
-                non_whitespace_char_count: from_sql_i64(char_count, "non_whitespace_char_count")?,
-                updated_at_ms,
-            };
-
-            match volume_id {
-                None => ungrouped_chapters.push(summary),
-                Some(volume_id) => {
-                    let volume = volumes
-                        .iter_mut()
-                        .find(|volume| volume.id.as_str() == volume_id)
-                        .ok_or_else(|| {
-                            BackendError::CorruptData(format!(
-                                "chapter {} references missing volume {volume_id}",
-                                summary.id
-                            ))
-                        })?;
-                    volume.chapters.push(summary);
-                }
-            }
-        }
-
-        Ok(Outline {
-            work_id,
-            volumes,
-            ungrouped_chapters,
+    pub fn workspace(&self) -> Result<Workspace> {
+        let connection = self.lock()?;
+        Ok(Workspace {
+            project: load_project(&connection)?.ok_or(BackendError::NotInitialized)?,
+            outline: load_outline(&connection)?,
+            last_opened_chapter_id: load_last_opened_chapter_id(&connection)?,
         })
     }
 
@@ -457,6 +501,192 @@ impl NovelBackend {
             .lock()
             .map_err(|_| BackendError::LockPoisoned)
     }
+}
+
+fn configure_connection(connection: &Connection) -> Result<()> {
+    let journal_mode: String =
+        connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err(BackendError::CorruptData(format!(
+            "journal_mode must be wal, got {journal_mode}"
+        )));
+    }
+
+    connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let foreign_keys: i64 = connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    if foreign_keys != 1 {
+        return Err(BackendError::CorruptData(format!(
+            "foreign_keys must be 1, got {foreign_keys}"
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_project_directory(directory: &Path) -> Result<PathBuf> {
+    let resolved = fs::canonicalize(directory)?;
+    if !resolved.is_dir() {
+        return Err(BackendError::InvalidProject(
+            "project directory is not a directory".into(),
+        ));
+    }
+    Ok(resolved)
+}
+
+struct CreationCleanup {
+    temporary_internal_directory: PathBuf,
+    temporary_manifest_path: PathBuf,
+    final_internal_directory: PathBuf,
+    temporary_internal_created: bool,
+    temporary_manifest_created: bool,
+    final_internal_created: bool,
+}
+
+impl CreationCleanup {
+    fn new(
+        temporary_internal_directory: PathBuf,
+        temporary_manifest_path: PathBuf,
+        final_internal_directory: PathBuf,
+    ) -> Self {
+        Self {
+            temporary_internal_directory,
+            temporary_manifest_path,
+            final_internal_directory,
+            temporary_internal_created: false,
+            temporary_manifest_created: false,
+            final_internal_created: false,
+        }
+    }
+
+    fn remove_created_targets(&self) {
+        if self.temporary_manifest_created {
+            let _ = fs::remove_file(&self.temporary_manifest_path);
+        }
+        if self.temporary_internal_created {
+            let _ = fs::remove_dir_all(&self.temporary_internal_directory);
+        }
+        if self.final_internal_created {
+            let _ = fs::remove_dir_all(&self.final_internal_directory);
+        }
+    }
+}
+
+fn verify_quick_check(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare("PRAGMA quick_check")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut saw_ok = false;
+    for row in rows {
+        let result = row?;
+        if result == "ok" {
+            saw_ok = true;
+        } else {
+            return Err(BackendError::InvalidProject(
+                "project database failed its integrity check".into(),
+            ));
+        }
+    }
+    if !saw_ok {
+        return Err(BackendError::InvalidProject(
+            "project database integrity check returned no result".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn load_project_identity(connection: &Connection) -> Result<(ProjectId, u32)> {
+    connection
+        .query_row(
+            "SELECT id, schema_version FROM projects LIMIT 1",
+            [],
+            |row| Ok((ProjectId::from_stored(row.get(0)?), row.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| BackendError::InvalidProject("database project record is missing".into()))
+}
+
+fn load_outline(connection: &Connection) -> Result<Outline> {
+    let work_id = require_work_id(connection)?;
+
+    let mut volumes_statement = connection.prepare(
+        "SELECT id, title, position FROM volumes WHERE work_id = ?1 ORDER BY position, id",
+    )?;
+    let volume_rows = volumes_statement.query_map([work_id.as_str()], |row| {
+        Ok(VolumeNode {
+            id: VolumeId::from_stored(row.get(0)?),
+            title: row.get(1)?,
+            position: row.get(2)?,
+            chapters: Vec::new(),
+        })
+    })?;
+    let mut volumes = volume_rows.collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut chapters_statement = connection.prepare(
+        "SELECT c.id, c.volume_id, c.title, c.status, c.position, d.edit_revision,
+                c.non_whitespace_char_count, c.updated_at_ms
+         FROM chapters c
+         JOIN chapter_drafts d ON d.chapter_id = c.id
+         WHERE c.work_id = ?1
+         ORDER BY CASE WHEN c.volume_id IS NULL THEN 0 ELSE 1 END, c.position, c.id",
+    )?;
+    let chapter_rows = chapters_statement.query_map([work_id.as_str()], |row| {
+        let status: String = row.get(3)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            status,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, i64>(7)?,
+        ))
+    })?;
+
+    let mut ungrouped_chapters = Vec::new();
+    for row in chapter_rows {
+        let (id, volume_id, title, status, position, revision, char_count, updated_at_ms) = row?;
+        let summary = ChapterSummary {
+            id: ChapterId::from_stored(id),
+            title,
+            status: parse_chapter_status(&status)?,
+            position,
+            edit_revision: from_sql_i64(revision, "edit_revision")?,
+            non_whitespace_char_count: from_sql_i64(char_count, "non_whitespace_char_count")?,
+            updated_at_ms,
+        };
+
+        match volume_id {
+            None => ungrouped_chapters.push(summary),
+            Some(volume_id) => {
+                let volume = volumes
+                    .iter_mut()
+                    .find(|volume| volume.id.as_str() == volume_id)
+                    .ok_or_else(|| {
+                        BackendError::CorruptData(format!(
+                            "chapter {} references missing volume {volume_id}",
+                            summary.id
+                        ))
+                    })?;
+                volume.chapters.push(summary);
+            }
+        }
+    }
+
+    Ok(Outline {
+        work_id,
+        volumes,
+        ungrouped_chapters,
+    })
+}
+
+fn load_last_opened_chapter_id(connection: &Connection) -> Result<Option<ChapterId>> {
+    Ok(connection
+        .query_row(
+            "SELECT value FROM app_metadata WHERE key = 'last_opened_chapter_id'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(ChapterId::from_stored))
 }
 
 fn current_edit_revision(connection: &Connection, chapter_id: &ChapterId) -> Result<u64> {

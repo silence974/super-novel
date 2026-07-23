@@ -191,6 +191,14 @@ pub struct Outline {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Workspace {
+    pub project: Project,
+    pub outline: Outline,
+    pub last_opened_chapter_id: Option<ChapterId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChapterCheckpoint {
     pub id: CheckpointId,
     pub chapter_id: ChapterId,

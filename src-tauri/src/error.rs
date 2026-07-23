@@ -49,11 +49,9 @@ impl From<BackendError> for CommandError {
                 "The project is already initialized.",
                 json!({}),
             ),
-            BackendError::NotInitialized => Self::new(
-                "not_initialized",
-                "No project is currently open.",
-                json!({}),
-            ),
+            BackendError::NotInitialized => {
+                Self::new("not_found", "No project is currently open.", json!({}))
+            }
             BackendError::InvalidProject(_) | BackendError::ManifestParse(_) => Self::new(
                 "invalid_project",
                 "The selected directory is not a valid Super Novel project.",

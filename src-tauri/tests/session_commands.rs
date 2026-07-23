@@ -27,3 +27,13 @@ fn revision_conflicts_expose_only_structured_revision_details() {
     assert_eq!(error.details["currentEditRevision"], 4);
     assert!(!error.message.contains("SQLite"));
 }
+
+#[test]
+fn unopened_projects_use_the_stable_not_found_error_contract() {
+    let error = CommandError::from(BackendError::NotInitialized);
+
+    assert_eq!(error.code, "not_found");
+    assert_eq!(error.message, "No project is currently open.");
+    assert_eq!(error.details, serde_json::json!({}));
+    assert!(!error.message.contains("SQLite"));
+}

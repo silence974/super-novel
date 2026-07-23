@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { NovelApi } from "./api";
 import { hasCommandErrorCode, safeCommandMessage, tauriApi } from "./api";
 import { StartScreen } from "./components/StartScreen";
+import { Workspace } from "./components/Workspace";
 import type { WorkspaceDto } from "./contracts";
 
 interface AppProps {
@@ -83,10 +84,5 @@ export function App({ api = tauriApi }: AppProps) {
     );
   }
 
-  return (
-    <main className="workspace-placeholder" aria-label="写作工作台">
-      <p className="eyebrow">当前项目</p>
-      <h1>{startup.workspace.project.name}</h1>
-    </main>
-  );
+  return <Workspace api={api} initialWorkspace={startup.workspace} />;
 }

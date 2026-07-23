@@ -54,6 +54,12 @@ export interface SavedDraftDto {
   updatedAtMs: number;
 }
 
+export interface SaveWorkingDraftInput {
+  chapterId: Id;
+  expectedEditRevision: number;
+  content: string;
+}
+
 export interface CheckpointSummaryDto {
   id: Id;
   chapterId: Id;

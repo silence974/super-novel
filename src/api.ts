@@ -6,6 +6,7 @@ import type {
   CheckpointSource,
   CheckpointSummaryDto,
   CommandError,
+  SaveWorkingDraftInput,
   SavedDraftDto,
   VolumeDto,
   WorkspaceDto,
@@ -20,11 +21,7 @@ export interface NovelApi {
   createVolume(title: string): Promise<VolumeDto>;
   createChapter(volumeId: string | null, title: string): Promise<ChapterDto>;
   getChapter(chapterId: string): Promise<ChapterDto>;
-  saveWorkingDraft(input: {
-    chapterId: string;
-    expectedEditRevision: number;
-    content: string;
-  }): Promise<SavedDraftDto>;
+  saveWorkingDraft(input: SaveWorkingDraftInput): Promise<SavedDraftDto>;
   createCheckpoint(input: {
     chapterId: string;
     expectedEditRevision: number;

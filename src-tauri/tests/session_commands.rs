@@ -90,6 +90,8 @@ fn packaging_embeds_the_frontend_with_strict_current_user_permissions() {
 
     assert_eq!(config["build"]["frontendDist"], "../dist");
     assert_eq!(config["build"]["beforeBuildCommand"], "npm run build");
+    assert_eq!(config["build"]["beforeDevCommand"], "npm run dev");
+    assert_eq!(config["build"]["devUrl"], "http://localhost:5173");
     assert_eq!(config["bundle"]["targets"], serde_json::json!(["nsis"]));
     assert_eq!(
         config["bundle"]["windows"]["nsis"]["installMode"],

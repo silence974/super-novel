@@ -1,0 +1,10 @@
+/target/
+*.db
+*.db-shm
+*.db-wal
+/.idea/
+/.vscode/
+/.superpowers/
+/node_modules/
+/dist/
+/src-tauri/target/

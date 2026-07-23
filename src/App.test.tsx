@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import {
   chapter,
@@ -9,6 +9,12 @@ import {
   workspace,
   workspaceApi,
 } from "./test/fixtures";
+
+const recentProjectsKey = "super-novel.recent-projects.v1";
+
+beforeEach(() => {
+  localStorage.clear();
+});
 
 test("loads the workspace once and shows the start screen when none is open", async () => {
   const api = {
@@ -27,6 +33,35 @@ test("loads the workspace once and shows the start screen when none is open", as
   expect(screen.getByRole("status")).toHaveTextContent("正在读取项目");
   expect(await screen.findByRole("heading", { name: "开始写作" })).toBeVisible();
   expect(api.getWorkspace).toHaveBeenCalledTimes(1);
+});
+
+test("shows persisted recent projects after startup finds no open workspace", async () => {
+  localStorage.setItem(
+    recentProjectsKey,
+    JSON.stringify([
+      {
+        name: "北岸手稿",
+        directory: "D:\\Novels\\北岸手稿",
+        lastOpenedAtMs: 12,
+      },
+    ]),
+  );
+  const api = {
+    getWorkspace: vi.fn().mockRejectedValue({
+      code: "not_found",
+      message: "No workspace",
+      details: {},
+      correlationId: "corr-recent-app",
+    }),
+    listenWindowCloseRequested: vi.fn().mockResolvedValue(() => undefined),
+    completeWindowClose: vi.fn(),
+  };
+
+  render(<App api={api as never} />);
+
+  expect(
+    await screen.findByRole("button", { name: "打开最近项目 北岸手稿" }),
+  ).toBeVisible();
 });
 
 test("shows the temporary workspace after startup succeeds", async () => {

@@ -311,6 +311,109 @@ p {
   font-weight: 650;
 }
 
+.recent-projects {
+  margin-top: 2rem;
+  border-top: 1px solid var(--line);
+}
+
+.recent-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 1.35rem 0 0.75rem;
+}
+
+.recent-heading h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 680;
+}
+
+.recent-projects ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-bottom: 1px solid var(--line);
+}
+
+.recent-project {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-top: 1px solid var(--line);
+}
+
+.recent-project-open {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+  padding: 0.85rem 0.65rem 0.85rem 0;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.recent-project-open span {
+  overflow: hidden;
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-open small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-remove {
+  padding: 0.45rem;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 0.68rem;
+}
+
+.recent-project-open:hover:not(:disabled) span,
+.recent-project-open:focus-visible span,
+.recent-project-remove:hover:not(:disabled),
+.recent-project-remove:focus-visible {
+  color: var(--accent);
+}
+
+.recent-project-open:focus-visible,
+.recent-project-remove:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.recent-project-open:active:not(:disabled),
+.recent-project-remove:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.recent-project button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.recent-project-state {
+  grid-column: 1 / -1;
+  padding: 0 0 0.65rem;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.recent-project-failed .recent-project-state {
+  color: var(--error);
+}
+
 .inline-status,
 .inline-error {
   margin: 1.5rem 0 0;
